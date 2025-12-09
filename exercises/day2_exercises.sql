@@ -4,6 +4,14 @@
 -- Duration: ~2 hours (instructor-led with exercises)
 -- Database: movies_db
 --
+-- TIMING:
+--   Section 1: Built-in Functions Warmup (15 min)
+--   Section 2: Writing Custom Functions (40 min)
+--   Section 3: Error Handling (15 min)
+--   Section 4: Triggers (40 min)
+--   Section 5: Wrap-up (5 min)
+--   Total: ~115 minutes (buffer for questions)
+--
 -- Run this lab AFTER the lecture.
 -- We'll build progressively more complex functions and triggers.
 -- ============================================================================
@@ -132,13 +140,14 @@ LIMIT 5;
 
 
 -- ============================================================================
--- SECTION 2: Writing Custom Functions (45 min)
+-- SECTION 2: Writing Custom Functions (40 min)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
 -- Demo: Simple Function - Get Movie Rating
 -- ----------------------------------------------------------------------------
 
+-- Building on Day 1: remember dollar quoting? Here's where it really shines.
 -- Let's create a function that gets the average rating for a movie
 CREATE OR REPLACE FUNCTION get_movie_avg_rating(p_movie_id INT)
 RETURNS NUMERIC
@@ -289,7 +298,7 @@ LIMIT 10;
 
 -- ----------------------------------------------------------------------------
 -- Exercise 2: Your Turn - Custom Functions
--- Time: 25 minutes
+-- Time: 20 minutes
 -- ----------------------------------------------------------------------------
 
 -- Exercise 2a: Create get_user_rating_count
@@ -338,18 +347,6 @@ LIMIT 10;
 -- Test your function:
 -- SELECT * FROM search_movies_by_keyword('robot');
 -- SELECT * FROM search_movies_by_keyword('love');
-
-
--- Exercise 2d: Create calculate_user_preference_score (CHALLENGE)
--- Create a function that takes user_id and movie_id
--- Returns a "preference score" (0-100) based on:
---   - How highly user rates similar genres (50% weight)
---   - How much user rates similar tags (50% weight)
--- This is a simplified recommendation algorithm
-
--- YOUR CODE HERE:
-
-
 
 
 -- ============================================================================
@@ -498,7 +495,7 @@ SELECT add_rating(99999, 1, 5);  -- Invalid movie
 
 
 -- ============================================================================
--- SECTION 4: Triggers (45 min)
+-- SECTION 4: Triggers (40 min)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -667,7 +664,7 @@ SELECT * FROM rating_audit ORDER BY audit_id DESC LIMIT 5;
 
 -- ----------------------------------------------------------------------------
 -- Exercise 4: Your Turn - Create Triggers
--- Time: 25 minutes
+-- Time: 20 minutes
 -- ----------------------------------------------------------------------------
 
 -- Exercise 4a: Create timestamp trigger for users table
@@ -702,7 +699,12 @@ SELECT * FROM rating_audit ORDER BY audit_id DESC LIMIT 5;
 -- Should fail with your custom message
 
 
--- Exercise 4c: Create a "trending" notification trigger (CHALLENGE)
+-- ----------------------------------------------------------------------------
+-- OPTIONAL CHALLENGE: Trending Notification Trigger
+-- (Skip if short on time - this is bonus material)
+-- ----------------------------------------------------------------------------
+
+-- Exercise 4c (OPTIONAL): Create a "trending" notification trigger
 -- Create a trigger that:
 -- 1. Fires after INSERT on ratings
 -- 2. Checks if the movie now has > 100 ratings
@@ -950,7 +952,7 @@ CREATE TRIGGER check_rating_value
     FOR EACH ROW
     EXECUTE FUNCTION validate_rating();
 
--- Solution 4c: Trending notification trigger
+-- Solution 4c (OPTIONAL): Trending notification trigger
 CREATE OR REPLACE FUNCTION notify_trending_movie()
 RETURNS TRIGGER
 LANGUAGE plpgsql
