@@ -286,7 +286,7 @@ BEGIN
         v_label := 'Poor';
     END IF;
 
-    RETURN FORMAT('%s (%.1f avg from %s ratings)', v_label, v_avg, v_count);
+    RETURN FORMAT('%s (%s avg from %s ratings)', v_label, ROUND(v_avg, 1), v_count);
 END;
 $$;
 
