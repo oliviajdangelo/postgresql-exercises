@@ -6,11 +6,15 @@
 --
 -- TIMING:
 --   Section 1: Built-in Functions Warmup (15 min)
---   Section 2: Writing Custom Functions (40 min)
+--   Section 2: Writing Custom Functions (25 min)
 --   Section 3: Error Handling (15 min)
---   Section 4: Triggers (40 min)
+--   Section 4: Triggers (25 min)
 --   Section 5: Wrap-up (5 min)
---   Total: ~115 minutes (buffer for questions)
+--   Total: ~85 minutes (buffer for questions)
+--
+-- NOTE: Functions and triggers are useful but less commonly written than
+-- other skills in this course. Focus on essential exercises; optional
+-- exercises are for students who finish early or want more practice.
 --
 -- Run this lab AFTER the lecture.
 -- We'll build progressively more complex functions and triggers.
@@ -106,7 +110,7 @@ LIMIT 5;
 -- Time: 10 minutes
 -- ----------------------------------------------------------------------------
 
--- Exercise 1a: Movie title analysis
+-- ** ESSENTIAL ** Exercise 1a: Movie title analysis
 -- Find movies where the title length is more than 30 characters
 -- Show: title, length, first 25 chars with '...' appended
 -- Order by length DESC
@@ -117,7 +121,7 @@ LIMIT 5;
 
 
 
--- Exercise 1b: Rating statistics by month
+-- (Optional) Exercise 1b: Rating statistics by month
 -- Show rating statistics grouped by month (regardless of year)
 -- Show: month name, total ratings, average rating (rounded to 2 decimals)
 -- Order by total ratings DESC
@@ -127,7 +131,7 @@ LIMIT 5;
 
 
 
--- Exercise 1c: Genre popularity with conditional counts
+-- (Optional) Exercise 1c: Genre popularity with conditional counts
 -- For each genre, count:
 --   - Total movies
 --   - Movies with rating >= 7
@@ -140,7 +144,7 @@ LIMIT 5;
 
 
 -- ============================================================================
--- SECTION 2: Writing Custom Functions (40 min)
+-- SECTION 2: Writing Custom Functions (25 min)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -298,10 +302,10 @@ LIMIT 10;
 
 -- ----------------------------------------------------------------------------
 -- Exercise 2: Your Turn - Custom Functions
--- Time: 20 minutes
+-- Time: 10 minutes
 -- ----------------------------------------------------------------------------
 
--- Exercise 2a: Create get_user_rating_count
+-- ** ESSENTIAL ** Exercise 2a: Create get_user_rating_count
 -- Create a function that takes a user_id
 -- Returns the number of ratings that user has made
 -- If user doesn't exist or has no ratings, return 0
@@ -317,7 +321,7 @@ LIMIT 10;
 -- FROM users LIMIT 10;
 
 
--- Exercise 2b: Create get_genre_stats
+-- (Optional) Exercise 2b: Create get_genre_stats
 -- Create a function that takes a genre name
 -- Returns a TABLE with: movie_count, avg_rating, avg_runtime
 -- Handle case where genre doesn't exist (return zeros)
@@ -332,7 +336,7 @@ LIMIT 10;
 -- SELECT * FROM get_genre_stats('NonExistent');
 
 
--- Exercise 2c: Create search_movies_by_keyword
+-- (Optional) Exercise 2c: Create search_movies_by_keyword
 -- Create a function that takes a keyword parameter
 -- Returns movies where title OR tags contain the keyword (case-insensitive)
 -- Return: movie_id, title, release_year, imdb_rating, matching_tags
@@ -469,7 +473,7 @@ SELECT add_rating(99999, 1, 5);  -- Invalid movie
 -- Time: 10 minutes
 -- ----------------------------------------------------------------------------
 
--- Exercise 3a: Improve get_genre_stats with error handling
+-- (Optional) Exercise 3a: Improve get_genre_stats with error handling
 -- Take your get_genre_stats function and add:
 -- 1. RAISE NOTICE when the genre is found (for debugging)
 -- 2. Handle the case where genre doesn't exist with a proper message
@@ -480,7 +484,7 @@ SELECT add_rating(99999, 1, 5);  -- Invalid movie
 
 
 
--- Exercise 3b: Create safe_update_movie_rating
+-- ** ESSENTIAL ** Exercise 3b: Create safe_update_movie_rating
 -- Create a function that updates a movie's imdb_rating
 -- Parameters: p_movie_id INT, p_new_rating NUMERIC
 -- Validations:
@@ -495,7 +499,7 @@ SELECT add_rating(99999, 1, 5);  -- Invalid movie
 
 
 -- ============================================================================
--- SECTION 4: Triggers (40 min)
+-- SECTION 4: Triggers (25 min)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -664,10 +668,10 @@ SELECT * FROM rating_audit ORDER BY audit_id DESC LIMIT 5;
 
 -- ----------------------------------------------------------------------------
 -- Exercise 4: Your Turn - Create Triggers
--- Time: 20 minutes
+-- Time: 10 minutes
 -- ----------------------------------------------------------------------------
 
--- Exercise 4a: Create timestamp trigger for users table
+-- ** ESSENTIAL ** Exercise 4a: Create timestamp trigger for users table
 -- Create a trigger that automatically updates created_at on the users table
 -- When a user record is updated, set a new column 'last_active' to NOW()
 -- First, add the column if needed:
@@ -683,7 +687,7 @@ SELECT * FROM rating_audit ORDER BY audit_id DESC LIMIT 5;
 -- SELECT user_id, username, last_active FROM users WHERE user_id = 1;
 
 
--- Exercise 4b: Create validation trigger
+-- (Optional) Exercise 4b: Create validation trigger
 -- Create a BEFORE INSERT trigger on ratings that:
 -- 1. Checks that the rating is between 1 and 10
 -- 2. If invalid, raise an exception with a helpful message
@@ -778,3 +782,208 @@ EXCEPTION
 -- DROP TABLE IF EXISTS rating_audit;
 -- DROP TABLE IF EXISTS notifications;
 
+
+-- ============================================================================
+-- SOLUTIONS (For Instructor Reference)
+-- ============================================================================
+
+/*
+-- Solution 1a: Movie title analysis
+SELECT
+    title,
+    LENGTH(title) AS length,
+    LEFT(title, 25) || '...' AS truncated
+FROM movies
+WHERE LENGTH(title) > 30
+ORDER BY LENGTH(title) DESC
+LIMIT 10;
+
+-- Solution 1b: Rating statistics by month
+SELECT
+    TO_CHAR(rated_at, 'Month') AS month_name,
+    COUNT(*) AS total_ratings,
+    ROUND(AVG(rating), 2) AS avg_rating
+FROM ratings
+GROUP BY EXTRACT(MONTH FROM rated_at), TO_CHAR(rated_at, 'Month')
+ORDER BY COUNT(*) DESC;
+
+-- Solution 1c: Genre popularity with conditional counts
+SELECT
+    g.name AS genre,
+    COUNT(*) AS total_movies,
+    COUNT(*) FILTER (WHERE m.imdb_rating >= 7) AS high_rated,
+    COUNT(*) FILTER (WHERE m.release_year > 2015) AS recent
+FROM genres g
+JOIN movie_genres mg ON g.genre_id = mg.genre_id
+JOIN movies m ON mg.movie_id = m.movie_id
+GROUP BY g.name
+ORDER BY total_movies DESC;
+
+-- Solution 2a: get_user_rating_count
+CREATE OR REPLACE FUNCTION get_user_rating_count(p_user_id INT)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_count
+    FROM ratings
+    WHERE user_id = p_user_id;
+
+    RETURN COALESCE(v_count, 0);
+END;
+$$;
+
+-- Solution 2b: get_genre_stats
+CREATE OR REPLACE FUNCTION get_genre_stats(p_genre_name TEXT)
+RETURNS TABLE(movie_count BIGINT, avg_rating NUMERIC, avg_runtime NUMERIC)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        COUNT(*)::BIGINT,
+        ROUND(AVG(m.imdb_rating), 2),
+        ROUND(AVG(m.runtime_min), 0)
+    FROM movies m
+    JOIN movie_genres mg ON m.movie_id = mg.movie_id
+    JOIN genres g ON mg.genre_id = g.genre_id
+    WHERE g.name = p_genre_name;
+END;
+$$;
+
+-- Solution 2c: search_movies_by_keyword
+CREATE OR REPLACE FUNCTION search_movies_by_keyword(p_keyword TEXT)
+RETURNS TABLE(
+    movie_id INT,
+    title TEXT,
+    release_year INT,
+    imdb_rating NUMERIC,
+    matching_tags TEXT[]
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        m.movie_id,
+        m.title,
+        m.release_year,
+        m.imdb_rating,
+        ARRAY(
+            SELECT unnest(m.tags)
+            WHERE unnest ILIKE '%' || p_keyword || '%'
+        ) AS matching_tags
+    FROM movies m
+    WHERE m.title ILIKE '%' || p_keyword || '%'
+       OR EXISTS (
+           SELECT 1 FROM unnest(m.tags) AS t
+           WHERE t ILIKE '%' || p_keyword || '%'
+       )
+    ORDER BY m.imdb_rating DESC NULLS LAST
+    LIMIT 20;
+END;
+$$;
+
+-- Solution 3b: safe_update_movie_rating
+CREATE OR REPLACE FUNCTION safe_update_movie_rating(
+    p_movie_id INT,
+    p_new_rating NUMERIC
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Validate rating range
+    IF p_new_rating < 0 OR p_new_rating > 10 THEN
+        RETURN 'Error: Rating must be between 0 and 10';
+    END IF;
+
+    -- Check if movie exists
+    IF NOT EXISTS (SELECT 1 FROM movies WHERE movie_id = p_movie_id) THEN
+        RETURN FORMAT('Error: Movie with id %s does not exist', p_movie_id);
+    END IF;
+
+    -- Update the rating
+    UPDATE movies
+    SET imdb_rating = p_new_rating
+    WHERE movie_id = p_movie_id;
+
+    RETURN 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN FORMAT('Error: %s', SQLERRM);
+END;
+$$;
+
+-- Solution 4a: User last_active trigger
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ;
+
+CREATE OR REPLACE FUNCTION update_user_last_active()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.last_active := NOW();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS set_user_last_active ON users;
+CREATE TRIGGER set_user_last_active
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_user_last_active();
+
+-- Solution 4b: Rating validation trigger
+CREATE OR REPLACE FUNCTION validate_rating()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.rating < 1 OR NEW.rating > 10 THEN
+        RAISE EXCEPTION 'Rating must be between 1 and 10. Got: %', NEW.rating;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS check_rating_value ON ratings;
+CREATE TRIGGER check_rating_value
+    BEFORE INSERT OR UPDATE ON ratings
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_rating();
+
+-- Solution 4c (OPTIONAL): Trending notification trigger
+CREATE OR REPLACE FUNCTION notify_trending_movie()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count INT;
+    v_title TEXT;
+BEGIN
+    SELECT COUNT(*), m.title
+    INTO v_count, v_title
+    FROM ratings r
+    JOIN movies m ON r.movie_id = m.movie_id
+    WHERE r.movie_id = NEW.movie_id
+    GROUP BY m.title;
+
+    IF v_count = 101 THEN  -- Just crossed 100
+        INSERT INTO notifications (message)
+        VALUES (FORMAT('Movie "%s" is now trending with %s ratings!', v_title, v_count));
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trending_notification ON ratings;
+CREATE TRIGGER trending_notification
+    AFTER INSERT ON ratings
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_trending_movie();
+*/
