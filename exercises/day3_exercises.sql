@@ -602,14 +602,29 @@ ORDER BY pg_relation_size(t.oid) DESC;
 SELECT
     idx1.indexrelid::regclass AS potentially_redundant,
     idx2.indexrelid::regclass AS covered_by,
-    idx1.indkey AS columns1,
-    idx2.indkey AS columns2
+    pg_get_indexdef(idx1.indexrelid) AS redundant_definition,
+    pg_get_indexdef(idx2.indexrelid) AS covering_definition
 FROM pg_index idx1
-JOIN pg_index idx2 ON idx1.indrelid = idx2.indrelid
-    AND idx1.indexrelid != idx2.indexrelid
-    AND idx1.indkey <@ idx2.indkey  -- idx1 columns are subset of idx2
-WHERE idx1.indrelid::regclass::text LIKE 'public.%'
-LIMIT 10;
+JOIN pg_index idx2 ON idx1.indrelid = idx2.indrelid  -- same table
+    AND idx1.indexrelid != idx2.indexrelid           -- different indexes
+    AND idx1.indkey::int[] <@ idx2.indkey::int[]     -- idx1 columns are subset of idx2
+JOIN pg_class c ON idx1.indrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE n.nspname = 'public';
+
+-- NOTE: We cast indkey to int[] because the <@ operator needs arrays.
+-- indkey is an int2vector type which doesn't directly support <@.
+
+-- EXAMPLE RESULTS you might see:
+-- ┌─────────────────────────┬───────────────────────────┐
+-- │ potentially_redundant   │ covered_by                │
+-- ├─────────────────────────┼───────────────────────────┤
+-- │ idx_movies_release_year │ idx_movies_year_title     │
+-- │ idx_users_username      │ users_username_key        │
+-- └─────────────────────────┴───────────────────────────┘
+--
+-- idx_movies_release_year(release_year) is covered by idx_movies_year_title(release_year, title)
+-- idx_users_username(username) is covered by users_username_key(username) - but one is UNIQUE!
 
 -- BEFORE DROPPING: Check if the "redundant" index is:
 -- 1. A UNIQUE constraint (needed for data integrity)
