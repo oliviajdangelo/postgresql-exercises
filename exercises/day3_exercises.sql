@@ -124,6 +124,36 @@ SELECT * FROM movies WHERE release_year = 2020;
 
 
 -- ----------------------------------------------------------------------------
+-- WHY YOU MIGHT STILL SEE SEQ SCAN AFTER ADDING AN INDEX
+-- ----------------------------------------------------------------------------
+
+-- Sometimes Postgres ignores your index and does a Seq Scan anyway.
+-- This is usually INTENTIONAL - the planner thinks Seq Scan is faster!
+
+-- Common reasons:
+
+-- 1. SMALL TABLE - For tiny tables, Seq Scan is faster than index overhead
+EXPLAIN ANALYZE SELECT * FROM movies WHERE release_year = 2020;
+-- If movies table has <1000 rows, Seq Scan might be chosen
+
+-- 2. QUERY RETURNS MOST ROWS - Index isn't helpful if you need 50% of table
+EXPLAIN ANALYZE SELECT * FROM movies WHERE release_year > 1990;
+-- If most movies are after 1990, Seq Scan is faster
+
+-- 3. STALE STATISTICS - Planner has wrong info about data distribution
+-- Fix: Run ANALYZE to update statistics
+ANALYZE movies;
+
+-- 4. SSD VS SPINNING DISK - Default settings assume slow random reads
+-- On SSD, random reads are fast, so indexes are more attractive
+-- Check/adjust: SHOW random_page_cost;  (default 4.0, try 1.1 for SSD)
+
+-- REMEMBER: Seq Scan isn't always bad!
+-- Trust the planner - it usually makes good choices.
+-- Only investigate if queries are actually slow.
+
+
+-- ----------------------------------------------------------------------------
 -- Demo: Composite Indexes
 -- ----------------------------------------------------------------------------
 
