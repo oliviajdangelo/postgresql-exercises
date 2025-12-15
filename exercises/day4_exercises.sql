@@ -17,6 +17,23 @@
 -- SECTION 1: EXPLAIN Basics (20 min)
 -- ============================================================================
 
+-- ============================================================================
+-- KEY CONCEPT: PLANNING VS EXECUTION
+-- ============================================================================
+--
+-- Before Postgres runs your query, it must PLAN how to execute it:
+--   1. PLANNING: Postgres estimates row counts, chooses scan types, join order
+--   2. EXECUTION: The query runs using that plan
+--
+-- EXPLAIN shows you the PLAN (what Postgres intends to do)
+-- EXPLAIN ANALYZE shows you PLAN + ACTUAL RESULTS (what really happened)
+--
+-- Why does this matter?
+-- If the plan was based on bad estimates, the query will be slow.
+-- EXPLAIN ANALYZE reveals the mismatch so you can fix it.
+-- ============================================================================
+
+
 -- ----------------------------------------------------------------------------
 -- Demo: EXPLAIN vs EXPLAIN ANALYZE
 -- ----------------------------------------------------------------------------
@@ -30,13 +47,43 @@ EXPLAIN ANALYZE
 SELECT * FROM movies WHERE release_year = 2020;
 
 -- Notice the difference:
--- • EXPLAIN: estimated rows, cost
--- • ANALYZE: actual rows, actual time
+-- • EXPLAIN: estimated rows, cost only
+-- • EXPLAIN ANALYZE: estimated AND actual rows, actual time
 
 
 -- ----------------------------------------------------------------------------
 -- Demo: Reading the Numbers
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- UNDERSTANDING EXPLAIN OUTPUT
+-- ============================================================================
+--
+-- Every line in EXPLAIN output contains key information:
+--
+--   Seq Scan on movies  (cost=0.00..15.50 rows=3 width=285)
+--                        ▲              ▲        ▲
+--                        │              │        └─ width: avg bytes per row
+--                        │              └─ rows: ESTIMATED row count
+--                        └─ cost: startup..total (arbitrary units, not milliseconds!)
+--
+-- With EXPLAIN ANALYZE, you also see:
+--
+--   (actual time=0.015..0.089 rows=5 loops=1)
+--                 ▲              ▲       ▲
+--                 │              │       └─ loops: times this node executed
+--                 │              └─ rows: ACTUAL row count
+--                 └─ time: ACTUAL milliseconds (startup..total)
+--
+-- COST vs TIME:
+--   • cost is a relative estimate (used to compare plans)
+--   • time is actual milliseconds (what users feel)
+--
+-- LOOPS:
+--   • Usually 1 for simple queries
+--   • Higher in nested loops (inner side runs once per outer row)
+--   • Multiply time × loops for true total time of that node
+-- ============================================================================
 
 -- Let's break down what we see
 EXPLAIN ANALYZE
@@ -62,6 +109,32 @@ Seq Scan on movies  (cost=0.00..15.50 rows=3 width=285)
 -- ----------------------------------------------------------------------------
 -- Demo: BUFFERS Option
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- UNDERSTANDING BUFFERS OUTPUT
+-- ============================================================================
+--
+-- BUFFERS shows how data was accessed:
+--
+--   Buffers: shared hit=5 read=2
+--            ▲           ▲
+--            │           └─ read: pages fetched from DISK (slow)
+--            └─ hit: pages found in MEMORY cache (fast)
+--
+-- What is a "page"?
+--   • PostgreSQL stores data in 8KB pages
+--   • Each buffer hit/read = one 8KB page
+--
+-- Why this matters:
+--   • Disk reads are ~100x slower than memory hits
+--   • High "read" count = query might be slow on cold cache
+--   • High "hit" count = data was already cached, fast!
+--
+-- First run vs. repeated runs:
+--   • First run: mostly "read" (loading from disk)
+--   • Repeated runs: mostly "hit" (already in cache)
+--   • Test with cold cache to see real-world performance
+-- ============================================================================
 
 -- Shows how much data was read
 EXPLAIN (ANALYZE, BUFFERS)
@@ -155,6 +228,29 @@ LIMIT 20;
 -- Demo: Estimate vs Actual Mismatch
 -- ----------------------------------------------------------------------------
 
+-- ============================================================================
+-- WHY JSONB ESTIMATES ARE OFTEN WRONG
+-- ============================================================================
+--
+-- PostgreSQL statistics work well for regular columns, but JSONB is tricky:
+--
+--   • Regular column: Postgres samples values, builds histogram
+--   • JSONB column: Postgres knows it's JSONB, but doesn't look INSIDE
+--
+-- When you query metadata->>'language' = 'French':
+--   • Postgres doesn't know how many rows have language='French'
+--   • It uses a default estimate (often 0.1% or 1% of rows)
+--   • This guess can be wildly wrong!
+--
+-- Result: estimated rows might say 5, actual rows might be 500
+--         Postgres chose a plan for 5 rows, but got 500 = slow!
+--
+-- Solutions:
+--   1. Run ANALYZE (helps a little)
+--   2. Create expression index: CREATE INDEX ON movies((metadata->>'language'))
+--   3. Create extended statistics (PostgreSQL 12+)
+-- ============================================================================
+
 -- When estimates are wrong, plans can be terrible
 -- Let's create a scenario with bad estimates
 
@@ -189,7 +285,7 @@ WHERE metadata->>'language' = 'French';
 -- This query does a Seq Scan - should it?
 EXPLAIN ANALYZE
 SELECT * FROM ratings
-WHERE rated_at > '2024-01-01';
+WHERE rated_at > CURRENT_DATE - INTERVAL '6 months';
 
 -- Many rows, filtered result - index would help
 -- But first, check if data is ordered (for BRIN consideration)
@@ -323,6 +419,34 @@ GROUP BY m.movie_id, m.title;
 -- Demo: EXISTS vs IN
 -- ----------------------------------------------------------------------------
 
+-- ============================================================================
+-- EXISTS VS IN: WHEN TO USE WHICH
+-- ============================================================================
+--
+-- Both check "does a matching row exist?" but work differently:
+--
+-- IN (subquery):
+--   • Executes subquery first, builds list of values
+--   • Then checks if each row's value is in that list
+--   • Good when: subquery returns FEW rows
+--   • Bad when: subquery returns MANY rows (huge list to check)
+--
+-- EXISTS (correlated subquery):
+--   • For each outer row, checks if subquery returns ANY row
+--   • Stops as soon as it finds ONE match (short-circuit)
+--   • Good when: subquery would return MANY rows per match
+--   • Good when: you just need to know "does it exist?"
+--
+-- Modern PostgreSQL is smart:
+--   • Often converts IN to a semi-join (same as EXISTS)
+--   • But not always! Check your EXPLAIN output
+--
+-- Rule of thumb:
+--   • Few subquery results → IN is fine
+--   • Many subquery results → EXISTS may be faster
+--   • When in doubt → test both with EXPLAIN ANALYZE
+-- ============================================================================
+
 -- IN with large list
 EXPLAIN ANALYZE
 SELECT * FROM movies m
@@ -343,8 +467,32 @@ WHERE EXISTS (SELECT 1 FROM ratings r WHERE r.movie_id = m.movie_id AND r.rating
 
 -- (Optional) Exercise 3a: This query is slow. Diagnose and fix it.
 
+-- ============================================================================
+-- WHY LEADING WILDCARDS CAN'T USE B-TREE INDEXES
+-- ============================================================================
+--
+-- B-tree indexes are like a phone book - sorted alphabetically.
+-- You can quickly find "Smith" because you know where 'S' entries start.
+--
+-- But searching for '%smith' (ends with 'smith') is different:
+--   • You can't jump to a starting point
+--   • You must scan EVERY entry to check the ending
+--   • Index is useless → Seq Scan
+--
+-- Pattern types and index usage:
+--   'smith%'   → CAN use B-tree index (knows where to start)
+--   '%smith'   → CANNOT use B-tree (must check all rows)
+--   '%smith%'  → CANNOT use B-tree (must check all rows)
+--
+-- Solutions for leading wildcard searches:
+--   1. pg_trgm extension with GIN index (trigram matching)
+--   2. Full-text search with tsvector
+--   3. Reverse the string: CREATE INDEX ON users(reverse(email))
+--      Then search: WHERE reverse(email) LIKE reverse('%@example.com')
+-- ============================================================================
+
 EXPLAIN ANALYZE
-SELECT * FROM users WHERE email LIKE '%@gmail.com';
+SELECT * FROM users WHERE email LIKE '%@example.com';
 
 -- Why is it slow?
 -- YOUR ANSWER:
@@ -360,7 +508,7 @@ EXPLAIN ANALYZE
 SELECT m.title, r.rated_at, r.rating
 FROM movies m
 JOIN ratings r ON m.movie_id = r.movie_id
-WHERE r.rated_at > '2024-06-01'
+WHERE r.rated_at > CURRENT_DATE - INTERVAL '3 months'
 ORDER BY r.rated_at DESC
 LIMIT 100;
 
@@ -374,7 +522,7 @@ SELECT
     u.username,
     (SELECT AVG(rating) FROM ratings r WHERE r.user_id = u.user_id) as avg_rating
 FROM users u
-WHERE u.created_at > '2024-01-01';
+WHERE u.created_at > CURRENT_DATE - INTERVAL '1 year';
 
 -- YOUR CODE HERE (rewritten query):
 
@@ -497,7 +645,7 @@ KEY TAKEAWAYS:
 -- Typically: Sort, Aggregate, Hash Join, Seq Scan/Index Scan,
 -- Nested Loop
 
--- Solution 3a: LIKE '%@gmail.com'
+-- Solution 3a: LIKE '%@example.com'
 -- Leading wildcard can't use B-tree index
 -- Options: Full-text search, pg_trgm extension,
 -- or reverse() with function-based index
@@ -514,7 +662,7 @@ SELECT
     AVG(r.rating) as avg_rating
 FROM users u
 LEFT JOIN ratings r ON r.user_id = u.user_id
-WHERE u.created_at > '2024-01-01'
+WHERE u.created_at > CURRENT_DATE - INTERVAL '1 year'
 GROUP BY u.user_id, u.username;
 
 -- Challenge solutions will vary based on current indexes
