@@ -31,10 +31,43 @@ ORDER BY tablename, indexname;
 -- Demo: Query Without Indexes
 -- ----------------------------------------------------------------------------
 
--- Enable timing to see actual execution time
+-- UNDERSTANDING EXPLAIN ANALYZE OUTPUT
+-- Before we start, let's understand what EXPLAIN ANALYZE shows us.
+-- Run this query and look at the output:
+
+EXPLAIN ANALYZE
+SELECT * FROM movies WHERE release_year = 2020;
+
+-- SAMPLE OUTPUT (yours will vary):
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │ Seq Scan on movies  (cost=0.00..125.00 rows=50 width=200)                   │
+-- │                     (actual time=0.015..2.456 rows=48 loops=1)              │
+-- │   Filter: (release_year = 2020)                                             │
+-- │   Rows Removed by Filter: 4952                                              │
+-- │ Planning Time: 0.089 ms                                                     │
+-- │ Execution Time: 2.501 ms                                                    │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+--
+-- HOW TO READ THIS:
+--
+-- "Seq Scan on movies" = Scan type (Sequential Scan = reading every row)
+--
+-- cost=0.00..125.00 = Estimated cost (arbitrary units, for comparison only)
+--   - First number (0.00) = startup cost before first row returns
+--   - Second number (125.00) = total estimated cost
+--
+-- rows=50 = Postgres's ESTIMATE of rows returned (before running)
+-- actual rows=48 = REAL rows returned (after running)
+--   - When these differ wildly, statistics might be stale (run ANALYZE)
+--
+-- loops=1 = How many times this step ran (important for joins)
+--
+-- Execution Time: 2.501 ms = Total query time (this is what users feel)
+
+-- Enable timing to see actual execution time in psql
 \timing on
 
--- Let's try some queries that would benefit from indexes
+-- Now let's run queries that would benefit from indexes
 -- Note the execution time!
 
 -- Query 1: Find movies from a specific year
@@ -72,8 +105,22 @@ CREATE INDEX idx_movies_release_year ON movies(release_year);
 EXPLAIN ANALYZE
 SELECT * FROM movies WHERE release_year = 2020;
 
--- Notice: Index Scan instead of Seq Scan!
--- Compare the execution time
+-- SAMPLE OUTPUT WITH INDEX:
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │ Index Scan using idx_movies_release_year on movies                          │
+-- │                     (cost=0.28..8.50 rows=50 width=200)                      │
+-- │                     (actual time=0.025..0.156 rows=48 loops=1)               │
+-- │   Index Cond: (release_year = 2020)                                          │
+-- │ Planning Time: 0.152 ms                                                      │
+-- │ Execution Time: 0.187 ms                                                     │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+--
+-- WHAT CHANGED:
+-- ✓ "Index Scan" instead of "Seq Scan" - using the index!
+-- ✓ "Index Cond" instead of "Filter" - condition pushed to index
+-- ✓ cost dropped from 125.00 to 8.50 (estimated 15x faster)
+-- ✓ Execution Time dropped from ~2.5ms to ~0.2ms (actual 10x faster)
+-- ✓ No "Rows Removed by Filter" - only read matching rows
 
 
 -- ----------------------------------------------------------------------------
@@ -108,7 +155,21 @@ CREATE INDEX idx_movies_year_title ON movies(release_year, title);
 EXPLAIN ANALYZE
 SELECT release_year, title FROM movies WHERE release_year = 2020;
 
--- Look for "Index Only Scan" - fastest possible!
+-- SAMPLE OUTPUT - INDEX ONLY SCAN:
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │ Index Only Scan using idx_movies_year_title on movies                       │
+-- │                     (cost=0.28..4.50 rows=50 width=45)                       │
+-- │                     (actual time=0.020..0.098 rows=48 loops=1)               │
+-- │   Index Cond: (release_year = 2020)                                          │
+-- │   Heap Fetches: 0                                                            │
+-- │ Execution Time: 0.121 ms                                                     │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+--
+-- KEY INDICATORS:
+-- ✓ "Index Only Scan" - the fastest scan type!
+-- ✓ "Heap Fetches: 0" - didn't need to read the table at all
+--   (If Heap Fetches > 0, table was accessed for visibility checks - run VACUUM)
+-- ✓ Even lower cost than regular Index Scan
 
 
 -- ----------------------------------------------------------------------------
@@ -188,10 +249,63 @@ SELECT * FROM movies WHERE metadata ? 'budget';
 -- Demo: GIN for Full-Text Search
 -- ----------------------------------------------------------------------------
 
--- Create GIN index on search vector
+-- WHAT IS A TSVECTOR?
+-- A tsvector is text that's been preprocessed for fast searching.
+-- Let's see what it looks like:
+
+SELECT to_tsvector('english', 'The Dark Knight Rises');
+-- Returns: 'dark':2 'knight':3 'rise':4
+--
+-- What happened:
+--   - "The" was removed (it's a common "stop word")
+--   - "Rises" became "rise" (stemming - reduces words to their root)
+--   - Numbers show word positions (useful for phrase searches)
+
+-- The movies table has a pre-computed search_vector column
+-- Let's see what's stored in it:
+SELECT title, search_vector
+FROM movies
+LIMIT 3;
+
+-- WHY USE A STORED COLUMN?
+-- Converting text to tsvector is expensive. By storing it in a column,
+-- we do the conversion once when data is inserted, not on every search.
+
+-- HOW TO CREATE A SEARCH VECTOR COLUMN (for reference):
+-- 1. Add the column:
+--    ALTER TABLE movies ADD COLUMN search_vector tsvector;
+--
+-- 2. Populate it from text columns:
+--    UPDATE movies SET search_vector =
+--        to_tsvector('english', title || ' ' || COALESCE(description, ''));
+--
+-- 3. Keep it updated with a trigger (we'll cover triggers on Day 2)
+
+-- NOW CREATE THE GIN INDEX
+-- Without this index, every search would scan all rows
 CREATE INDEX idx_movies_search ON movies USING GIN (search_vector);
 
--- Full-text search now uses the index
+-- SEARCHING WITH TSQUERY
+-- to_tsquery converts your search terms into a searchable format
+-- The @@ operator means "matches"
+
+-- Simple search for one word
+EXPLAIN ANALYZE
+SELECT title FROM movies
+WHERE search_vector @@ to_tsquery('english', 'adventure');
+
+-- Search with AND (&) - must contain both words
+EXPLAIN ANALYZE
+SELECT title FROM movies
+WHERE search_vector @@ to_tsquery('english', 'adventure & space');
+
+-- Search with OR (|) - contains either word
+EXPLAIN ANALYZE
+SELECT title FROM movies
+WHERE search_vector @@ to_tsquery('english', 'adventure | comedy');
+
+-- RANKING RESULTS
+-- ts_rank scores how well each row matches (higher = better match)
 EXPLAIN ANALYZE
 SELECT title, ts_rank(search_vector, query) AS rank
 FROM movies, to_tsquery('adventure & space') query
@@ -205,10 +319,10 @@ LIMIT 10;
 -- Time: 15 minutes
 -- ----------------------------------------------------------------------------
 
--- ** ESSENTIAL ** Exercise 2a: The users table has a JSONB 'preferences' column
--- Create an index to speed up this query:
+-- ** ESSENTIAL ** Exercise 2a: The movies table has a JSONB 'metadata' column
+-- Create a GIN index to speed up this query:
 EXPLAIN ANALYZE
-SELECT * FROM users WHERE preferences @> '{"theme": "dark"}';
+SELECT * FROM movies WHERE metadata @> '{"streaming": "Netflix"}';
 
 -- YOUR CODE HERE:
 
@@ -235,9 +349,25 @@ WHERE tags && ARRAY['comedy', 'romance'];
 -- SECTION 4: Index Analysis (30 min)
 -- ============================================================================
 
+-- WHY MONITOR INDEXES?
+-- Indexes speed up reads but slow down writes (INSERT/UPDATE/DELETE).
+-- Every index must be updated when data changes.
+-- Unused indexes waste disk space AND slow down writes for no benefit.
+--
+-- This section teaches you how to find:
+--   1. Which indexes are actually being used
+--   2. Which indexes might be candidates for removal
+--   3. How much space indexes consume
+
 -- ----------------------------------------------------------------------------
 -- Demo: Checking Index Usage
 -- ----------------------------------------------------------------------------
+
+-- PostgreSQL tracks how often each index is used in pg_stat_user_indexes
+-- Key columns:
+--   idx_scan       = How many times the index was used for lookups
+--   idx_tup_read   = How many index entries were read
+--   idx_tup_fetch  = How many table rows were fetched via the index
 
 -- See all indexes and their usage statistics
 SELECT
@@ -252,12 +382,21 @@ FROM pg_stat_user_indexes
 WHERE schemaname = 'public'
 ORDER BY idx_scan DESC;
 
+-- INTERPRETING THE RESULTS:
+-- - High idx_scan = index is heavily used (good!)
+-- - idx_scan = 0 = index has never been used (investigate!)
+-- - Large size + low usage = wasting space
+
 
 -- ----------------------------------------------------------------------------
 -- Demo: Finding Unused Indexes
 -- ----------------------------------------------------------------------------
 
--- Indexes with zero scans might be candidates for removal
+-- UNUSED INDEXES ARE A PROBLEM
+-- They take up disk space AND slow down every INSERT/UPDATE/DELETE
+-- because Postgres must update all indexes when data changes.
+
+-- Find indexes that have never been used (idx_scan = 0)
 SELECT
     schemaname,
     relname AS table_name,
@@ -269,35 +408,65 @@ WHERE idx_scan = 0
   AND schemaname = 'public'
 ORDER BY pg_relation_size(indexrelid) DESC;
 
--- Warning: Stats reset on server restart, so zero might just mean "recently"
+-- IMPORTANT CAVEATS before dropping "unused" indexes:
+-- 1. Stats reset on server restart - zero might mean "not used since restart"
+-- 2. Some indexes are for rare but critical queries (monthly reports, etc.)
+-- 3. Primary key and unique indexes enforce constraints - don't drop these!
+-- 4. Foreign key indexes speed up DELETE on parent tables
+--
+-- SAFE APPROACH: Monitor for at least one full business cycle (week/month)
+-- before deciding an index is truly unused.
 
 
 -- ----------------------------------------------------------------------------
 -- Demo: Index Size vs Table Size
 -- ----------------------------------------------------------------------------
 
+-- HOW MUCH SPACE DO INDEXES USE?
+-- It's common for indexes to be larger than the table itself!
+-- Each index duplicates some data in a different structure.
+
 -- Compare table and index sizes
 SELECT
     t.relname AS table_name,
     pg_size_pretty(pg_relation_size(t.oid)) AS table_size,
     pg_size_pretty(pg_indexes_size(t.oid)) AS total_index_size,
-    (SELECT COUNT(*) FROM pg_index WHERE indrelid = t.oid) AS index_count
+    (SELECT COUNT(*) FROM pg_index WHERE indrelid = t.oid) AS index_count,
+    CASE
+        WHEN pg_relation_size(t.oid) > 0
+        THEN ROUND(100.0 * pg_indexes_size(t.oid) / pg_relation_size(t.oid))
+        ELSE 0
+    END AS index_percent_of_table
 FROM pg_class t
 JOIN pg_namespace n ON t.relnamespace = n.oid
 WHERE n.nspname = 'public'
   AND t.relkind = 'r'
 ORDER BY pg_relation_size(t.oid) DESC;
 
+-- WHAT'S NORMAL?
+-- - 50-150% of table size in indexes is typical for OLTP
+-- - Higher ratios might indicate over-indexing
+-- - Very low ratios might mean missing indexes (but check query patterns first)
+
 
 -- ----------------------------------------------------------------------------
 -- Demo: Duplicate/Redundant Indexes
 -- ----------------------------------------------------------------------------
 
+-- WHAT ARE REDUNDANT INDEXES?
+-- If you have an index on (a, b), you DON'T need a separate index on (a).
+-- The composite index handles both cases:
+--   WHERE a = ?           → Uses (a, b) index
+--   WHERE a = ? AND b = ? → Uses (a, b) index
+--
+-- But (a, b) does NOT help with: WHERE b = ?
+-- So an index on (b) alone is NOT redundant.
+
 -- Find indexes that might be redundant
--- (index on (a) is redundant if you have index on (a, b))
+-- This query finds indexes whose columns are a prefix of another index
 SELECT
-    idx1.indexrelid::regclass AS index1,
-    idx2.indexrelid::regclass AS index2,
+    idx1.indexrelid::regclass AS potentially_redundant,
+    idx2.indexrelid::regclass AS covered_by,
     idx1.indkey AS columns1,
     idx2.indkey AS columns2
 FROM pg_index idx1
@@ -307,6 +476,11 @@ JOIN pg_index idx2 ON idx1.indrelid = idx2.indrelid
 WHERE idx1.indrelid::regclass::text LIKE 'public.%'
 LIMIT 10;
 
+-- BEFORE DROPPING: Check if the "redundant" index is:
+-- 1. A UNIQUE constraint (needed for data integrity)
+-- 2. Smaller and faster for common queries (sometimes worth keeping)
+-- 3. Used by the query planner for specific access patterns
+
 
 -- ----------------------------------------------------------------------------
 -- Exercise 3: Your Turn - Index Analysis
@@ -315,13 +489,18 @@ LIMIT 10;
 
 -- ** ESSENTIAL ** Exercise 3a: Find the three largest indexes in the database
 -- Show: index name, table name, size
+--
+-- HINT: Use pg_stat_user_indexes and pg_relation_size()
+-- ORDER BY size descending, LIMIT to 3
 
 -- YOUR CODE HERE:
 
 
 
 -- (Optional) Exercise 3b: Find indexes that have been used fewer than 10 times
--- These might be candidates for review
+-- These might be candidates for review (but remember the caveats above!)
+--
+-- HINT: Filter on idx_scan < 10
 
 -- YOUR CODE HERE:
 
@@ -331,6 +510,9 @@ LIMIT 10;
 -- 1. How many indexes does it have?
 -- 2. What's the total size of all its indexes?
 -- 3. Which index is used most?
+--
+-- HINT: Filter pg_stat_user_indexes WHERE relname = 'ratings'
+-- Use COUNT(*) and SUM() for aggregates
 
 -- YOUR CODE HERE:
 
@@ -360,7 +542,28 @@ KEY TAKEAWAYS:
 5. Monitor index usage with pg_stat_user_indexes
    Remove unused indexes - they slow down writes
 
-TOMORROW: We'll use EXPLAIN to see these indexes in query plans
+QUICK REFERENCE - EXPLAIN ANALYZE OUTPUT:
+
+Scan Types (from slowest to fastest):
+┌───────────────────┬───────────────────────────────────────────────┐
+│ Seq Scan          │ Reads every row - bad for large tables        │
+│ Bitmap Index Scan │ Builds bitmap from index, then fetches rows   │
+│ Index Scan        │ Uses index to find rows, fetches from table   │
+│ Index Only Scan   │ Answers entirely from index - fastest!        │
+└───────────────────┴───────────────────────────────────────────────┘
+
+Key Numbers to Watch:
+• actual time - Real execution time in milliseconds
+• rows - How many rows returned (compare to estimate)
+• loops - Times this step ran (multiply by time for total)
+• Heap Fetches - Table accesses in Index Only Scan (0 = perfect)
+
+Red Flags:
+• Seq Scan on large table with small result set → add index
+• rows estimate wildly different from actual → run ANALYZE
+• Filter removing most rows → index on filter column
+
+TOMORROW: We'll dive deeper into EXPLAIN and query optimization
 */
 
 
@@ -385,8 +588,8 @@ CREATE INDEX idx_ratings_user_rating ON ratings(user_id, rating);
 -- because user_id is the second column. Need separate index:
 CREATE INDEX idx_ratings_user_id ON ratings(user_id);
 
--- Solution 2a: GIN index on preferences
-CREATE INDEX idx_users_preferences ON users USING GIN (preferences);
+-- Solution 2a: GIN index on metadata JSONB column
+CREATE INDEX idx_movies_metadata ON movies USING GIN (metadata);
 
 -- Solution 2b: The idx_movies_tags GIN index helps with &&
 -- Query is already shown in exercise
