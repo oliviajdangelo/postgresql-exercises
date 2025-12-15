@@ -417,10 +417,36 @@ WHERE tags && ARRAY['comedy', 'romance'];
 -- ----------------------------------------------------------------------------
 
 -- PostgreSQL tracks how often each index is used in pg_stat_user_indexes
--- Key columns:
---   idx_scan       = How many times the index was used for lookups
---   idx_tup_read   = How many index entries were read
---   idx_tup_fetch  = How many table rows were fetched via the index
+--
+-- Key columns explained:
+--
+--   idx_scan = Number of times the index was used
+--              Each query that uses this index adds 1 to this count
+--
+--   idx_tup_read = Number of index entries scanned
+--                  How many entries Postgres looked at IN the index
+--
+--   idx_tup_fetch = Number of table rows fetched
+--                   How many actual rows Postgres retrieved FROM the table
+--                   (This is 0 for Index Only Scans - no table access needed)
+--
+-- EXAMPLE - What do these numbers tell us?
+--
+-- Imagine an index on users(email) with these stats:
+--   idx_scan = 1000        (index used 1000 times)
+--   idx_tup_read = 1000    (read 1000 index entries total)
+--   idx_tup_fetch = 1000   (fetched 1000 rows from table)
+--
+-- This means: ~1 row per query. Likely unique lookups like:
+--   SELECT * FROM users WHERE email = 'someone@example.com'
+--
+-- Now imagine different stats:
+--   idx_scan = 100         (index used 100 times)
+--   idx_tup_read = 50000   (read 50,000 index entries)
+--   idx_tup_fetch = 50000  (fetched 50,000 rows)
+--
+-- This means: ~500 rows per query. Likely range queries like:
+--   SELECT * FROM users WHERE created_at > '2024-01-01'
 
 -- See all indexes and their usage statistics
 SELECT
