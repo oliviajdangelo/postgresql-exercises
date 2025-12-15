@@ -177,6 +177,62 @@ EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM movies WHERE release_year = 2020;
 
 
 -- ----------------------------------------------------------------------------
+-- UNDERSTANDING SCAN TYPES: Seq Scan → Bitmap → Index → Index Only
+-- ----------------------------------------------------------------------------
+
+-- Postgres has several ways to read data. Here's when each is used:
+--
+-- 1. SEQ SCAN (Sequential Scan)
+--    Reads every row in the table, one page at a time.
+--    Used when: No useful index, or query returns most of the table.
+--
+-- 2. INDEX SCAN
+--    Looks up values in the index, then fetches each matching row from table.
+--    Used when: Few rows match, and they're scattered across the table.
+--    Downside: Random I/O - jumps around the table to fetch rows.
+--
+-- 3. BITMAP HEAP SCAN (two-step process)
+--    Step 1 - Bitmap Index Scan: Scans index, builds a "bitmap" of matching pages
+--    Step 2 - Bitmap Heap Scan: Reads those pages from the table in order
+--    Used when: Many rows match, but not enough to justify full Seq Scan.
+--    Benefit: Reads table pages in sequential order (faster than random I/O).
+--
+-- 4. INDEX ONLY SCAN
+--    Answers query entirely from the index - never touches the table.
+--    Used when: All columns needed are in the index.
+--    Fastest option when applicable.
+
+-- EXAMPLE: Bitmap Heap Scan in action
+-- This query might return hundreds of movies, too many for Index Scan,
+-- but not enough for Seq Scan:
+EXPLAIN ANALYZE
+SELECT * FROM movies WHERE release_year BETWEEN 2018 AND 2022;
+
+-- You might see output like:
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │ Bitmap Heap Scan on movies                                                  │
+-- │   Recheck Cond: (release_year >= 2018 AND release_year <= 2022)             │
+-- │   ->  Bitmap Index Scan on idx_movies_release_year                          │
+-- │         Index Cond: (release_year >= 2018 AND release_year <= 2022)         │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+--
+-- Reading this bottom-up:
+--   1. Bitmap Index Scan - finds all matching entries in the index
+--   2. Builds a bitmap (map of which table pages contain matches)
+--   3. Bitmap Heap Scan - reads those pages in sequential order
+--   4. Recheck Cond - double-checks each row (needed if bitmap got "lossy")
+
+-- WHEN DOES POSTGRES CHOOSE EACH?
+--
+-- Rough guide (actual thresholds depend on table size and statistics):
+--   ~1-5% of rows    → Index Scan (few rows, random I/O is OK)
+--   ~5-25% of rows   → Bitmap Heap Scan (batch the reads, sequential I/O)
+--   ~25%+ of rows    → Seq Scan (just read everything)
+--
+-- The planner calculates costs and picks the cheapest option.
+
+
+-- ----------------------------------------------------------------------------
 -- Demo: Composite Indexes
 -- ----------------------------------------------------------------------------
 
