@@ -152,6 +152,29 @@ ANALYZE movies;
 -- Trust the planner - it usually makes good choices.
 -- Only investigate if queries are actually slow.
 
+-- MEMORY VS DISK - DO INDEXES MATTER IF DATA IS CACHED?
+--
+-- Postgres keeps frequently-used data in memory (shared_buffers).
+-- But memory caching and index usage are SEPARATE decisions:
+--
+--   - Caching = WHERE data lives (memory or disk)
+--   - Index   = HOW MUCH data to read (few pages or all pages)
+--
+-- Even if your entire table is in memory:
+--   - Seq Scan still reads ALL pages (just from memory instead of disk)
+--   - Index Scan still reads FEWER pages (and those come from memory too)
+--
+-- So indexes help regardless of caching!
+--
+-- To see where data came from, add BUFFERS to your EXPLAIN:
+EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM movies WHERE release_year = 2020;
+--
+-- Output will show:
+--   Buffers: shared hit=10      ← 10 pages read from memory cache (fast)
+--   Buffers: shared read=5      ← 5 pages read from disk (slower)
+--
+-- "hit" = memory, "read" = disk. More hits = faster query.
+
 
 -- ----------------------------------------------------------------------------
 -- Demo: Composite Indexes
