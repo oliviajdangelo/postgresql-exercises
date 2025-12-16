@@ -19,6 +19,33 @@
 -- SECTION 1: pg_stat_statements Analysis (30 min) ** HIGH VALUE **
 -- ============================================================================
 
+-- ============================================================================
+-- KEY CONCEPT: pg_stat_statements
+-- ============================================================================
+--
+-- pg_stat_statements is PostgreSQL's built-in query profiler.
+-- It tracks statistics for EVERY query executed on the database.
+--
+-- This is "Step 1: Find" in our diagnostic workflow (Day 4):
+--   1. FIND slow queries    ← pg_stat_statements (today!)
+--   2. DIAGNOSE with EXPLAIN ANALYZE (Day 4)
+--   3. FIX with indexes (Day 3) or query rewrites
+--
+-- Key columns in pg_stat_statements:
+--   • query           - The SQL text (normalized, parameters as $1, $2)
+--   • calls           - Number of times executed
+--   • total_exec_time - Total milliseconds spent (cumulative)
+--   • mean_exec_time  - Average milliseconds per call
+--   • rows            - Total rows returned
+--   • shared_blks_hit - Pages found in cache (fast)
+--   • shared_blks_read- Pages read from disk (slow)
+--
+-- Two ways to find problem queries:
+--   • High total_exec_time = burning the most total time
+--   • High mean_exec_time = slowest per-call (may need EXPLAIN)
+-- ============================================================================
+
+
 -- ----------------------------------------------------------------------------
 -- Demo: Checking pg_stat_statements is Enabled
 -- ----------------------------------------------------------------------------
@@ -36,6 +63,24 @@ SELECT COUNT(*) FROM pg_stat_statements;
 -- ----------------------------------------------------------------------------
 -- Demo: Finding Slow Queries
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- UNDERSTANDING THE OUTPUT
+-- ============================================================================
+--
+-- Example output:
+--
+--   query_preview                      | calls | total_ms  | avg_ms | percent | rows
+--   -----------------------------------+-------+-----------+--------+---------+------
+--   SELECT * FROM ratings WHERE mov... |  5000 | 125000.00 |  25.00 |   45.2  | 50000
+--   SELECT m.*, r.rating FROM movie... |   200 |  40000.00 | 200.00 |   14.5  |  2000
+--                                        ▲           ▲         ▲         ▲
+--                             Ran 5000x  │   125 sec  │   25ms  │   45% of
+--                                        │   total    │   each  │   all time
+--
+-- Query 1: Fast per-call (25ms) but runs so often it dominates
+-- Query 2: Slow per-call (200ms) - good candidate for EXPLAIN ANALYZE
+-- ============================================================================
 
 -- Top 10 queries by total execution time
 SELECT
@@ -70,6 +115,28 @@ LIMIT 10;
 -- ----------------------------------------------------------------------------
 -- Demo: Queries with High I/O
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- UNDERSTANDING CACHE HIT RATE
+-- ============================================================================
+--
+-- PostgreSQL caches data pages in shared_buffers (memory).
+--
+--   shared_blks_hit  = Pages found in memory (fast, ~0.1ms)
+--   shared_blks_read = Pages loaded from disk (slow, ~1-10ms)
+--
+-- Cache hit rate = hit / (hit + read) × 100
+--
+-- What's a good cache hit rate?
+--   • 99%+ = Excellent (almost everything in memory)
+--   • 95-99% = Good (typical for well-tuned systems)
+--   • <90% = Investigate (data too large for cache, or bad access patterns)
+--
+-- Low cache hit on a specific query might mean:
+--   • Missing index (scanning lots of pages)
+--   • Query returns too much data
+--   • Data accessed rarely (not cached)
+-- ============================================================================
 
 -- Queries reading the most data
 SELECT
@@ -123,9 +190,53 @@ Option 3: pgAdmin + terminal
 Label them SESSION A and SESSION B
 */
 
+-- ============================================================================
+-- KEY CONCEPT: WHY LOCKING MATTERS
+-- ============================================================================
+--
+-- PostgreSQL uses locks to prevent data corruption when multiple
+-- connections access the same data simultaneously.
+--
+-- Common symptoms of locking problems:
+--   • Queries "hang" and don't return
+--   • Application timeouts
+--   • Deadlock errors in logs
+--   • "idle in transaction" connections piling up
+--
+-- Key insight: Locks are held until COMMIT or ROLLBACK
+--   → Long transactions = long lock hold times = more contention
+--
+-- Lock modes (simplified):
+--   • ROW EXCLUSIVE  - Normal INSERT/UPDATE/DELETE (rarely conflicts)
+--   • FOR UPDATE     - Explicit row lock (blocks other FOR UPDATE)
+--   • ACCESS EXCLUSIVE - DDL like ALTER TABLE (blocks everything!)
+--
+-- Most applications: Row-level locks rarely conflict.
+-- Problems happen with: Long transactions, explicit FOR UPDATE, DDL.
+-- ============================================================================
+
+
 -- ----------------------------------------------------------------------------
 -- Demo: Viewing Current Locks
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- UNDERSTANDING pg_locks OUTPUT
+-- ============================================================================
+--
+--   locktype | relation | mode           | granted | pid
+--   ---------+----------+----------------+---------+-----
+--   relation | movies   | RowExclusiveLock| t       | 1234
+--   relation | movies   | RowExclusiveLock| f       | 5678  ← Waiting!
+--                                          ▲
+--                          granted = false means this process is BLOCKED
+--
+-- Key columns:
+--   • relation   - Which table is locked
+--   • mode       - Type of lock (RowExclusive, AccessExclusive, etc.)
+--   • granted    - true = has the lock, false = waiting for it
+--   • pid        - Process ID (use to find query in pg_stat_activity)
+-- ============================================================================
 
 -- See all current locks
 SELECT
@@ -200,6 +311,30 @@ ROLLBACK;
 -- ----------------------------------------------------------------------------
 -- Demo: Detecting Idle-in-Transaction
 -- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- WHY "IDLE IN TRANSACTION" IS DANGEROUS
+-- ============================================================================
+--
+-- "idle in transaction" means:
+--   • A connection ran BEGIN
+--   • Did some work
+--   • Is now sitting there doing nothing
+--   • But hasn't COMMITted or ROLLBACKed
+--
+-- Why is this bad?
+--   1. Holds locks - other queries may be blocked waiting
+--   2. Prevents VACUUM - dead tuples can't be cleaned up
+--   3. Wastes connections - connection pool exhaustion
+--   4. Can cause transaction ID wraparound (extreme cases)
+--
+-- Common causes:
+--   • Application bug (forgot to commit)
+--   • User opened transaction in pgAdmin and walked away
+--   • Connection pool not releasing properly
+--
+-- Fix: Find and kill these connections, then fix the application code
+-- ============================================================================
 
 -- Find connections that started a transaction but are doing nothing
 SELECT
@@ -329,6 +464,27 @@ UPDATE users SET username = username WHERE user_id = 2;
 -- UPDATE users SET username = username WHERE user_id = 1;
 -- One session will get: ERROR: deadlock detected
 
+-- ============================================================================
+-- WHAT A DEADLOCK ERROR LOOKS LIKE
+-- ============================================================================
+--
+-- ERROR:  deadlock detected
+-- DETAIL: Process 12345 waits for ShareLock on transaction 67890;
+--         blocked by process 11111.
+--         Process 11111 waits for ShareLock on transaction 12345;
+--         blocked by process 12345.
+-- HINT:  See server log for query details.
+-- CONTEXT: while updating tuple (0,1) in relation "users"
+--
+-- PostgreSQL automatically:
+--   1. Detects the circular wait
+--   2. Picks one transaction to abort (victim)
+--   3. Rolls back the victim
+--   4. Other transaction proceeds
+--
+-- Your application should: Catch this error and retry the transaction
+-- ============================================================================
+
 /*
 IMPORTANT: Notice the error message includes which transaction was rolled back.
 Prevention: Always access tables/rows in the same order across all code paths.
@@ -373,6 +529,48 @@ UPDATE movies SET title = REPLACE(title, ' (Modified)', '') WHERE title LIKE '% 
 -- ============================================================================
 -- SECTION 3: Maintenance Operations (35 min)
 -- ============================================================================
+
+-- ============================================================================
+-- KEY CONCEPT: VACUUM AND DEAD TUPLES
+-- ============================================================================
+--
+-- PostgreSQL's MVCC model keeps old row versions around:
+--   • UPDATE creates new row version, old one becomes "dead tuple"
+--   • DELETE marks row as dead, doesn't remove it
+--
+-- Why? Other transactions might still need to see the old data.
+--
+-- VACUUM cleans up dead tuples:
+--   • Marks space as reusable (doesn't shrink file)
+--   • Prevents "table bloat" (wasted space)
+--   • Updates visibility map (enables Index Only Scan)
+--
+-- Autovacuum runs automatically, but after bulk operations you may want
+-- to run VACUUM manually for immediate cleanup.
+--
+-- VACUUM vs VACUUM FULL:
+--   • VACUUM        - Marks space reusable, doesn't lock table
+--   • VACUUM FULL   - Rewrites table, reclaims disk space, LOCKS TABLE!
+--                     Only use VACUUM FULL for severe bloat.
+-- ============================================================================
+
+
+-- ============================================================================
+-- KEY CONCEPT: pg_stat_user_tables COLUMNS
+-- ============================================================================
+--
+--   relname        - Table name
+--   n_live_tup     - Estimated live rows
+--   n_dead_tup     - Estimated dead rows (need vacuum)
+--   last_vacuum    - Last manual VACUUM
+--   last_autovacuum- Last automatic VACUUM
+--   last_analyze   - Last manual ANALYZE
+--   last_autoanalyze - Last automatic ANALYZE
+--
+-- High n_dead_tup / n_live_tup ratio = table needs vacuum
+-- NULL last_analyze after bulk load = run ANALYZE manually
+-- ============================================================================
+
 
 -- ----------------------------------------------------------------------------
 -- Demo: Checking Table Statistics
@@ -435,6 +633,29 @@ ANALYZE ratings;
 SELECT relname, last_analyze
 FROM pg_stat_user_tables
 WHERE relname = 'ratings';
+
+-- ============================================================================
+-- UNDERSTANDING pg_stats OUTPUT
+-- ============================================================================
+--
+-- pg_stats shows what ANALYZE collected. This is what the planner uses!
+--
+--   attname          - Column name
+--   n_distinct       - Estimated distinct values
+--                      Positive = actual count, Negative = fraction of rows
+--                      e.g., -0.5 means ~50% of rows are distinct
+--   most_common_vals - Array of most frequent values
+--   most_common_freqs- Frequency of each (0.0 to 1.0)
+--
+-- Example output for 'rating' column:
+--   n_distinct: 10 (ratings 1-10)
+--   most_common_vals: {7,8,6,9,5}
+--   most_common_freqs: {0.22, 0.18, 0.15, 0.12, 0.10}
+--                       ▲
+--                       22% of ratings are 7
+--
+-- This helps the planner estimate: "WHERE rating = 7" returns ~22% of rows
+-- ============================================================================
 
 -- See the statistics Postgres collected
 SELECT
