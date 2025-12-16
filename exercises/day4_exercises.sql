@@ -121,19 +121,23 @@ Seq Scan on movies  (cost=0.00..15.50 rows=3 width=285)
 --            │           └─ read: pages fetched from DISK (slow)
 --            └─ hit: pages found in MEMORY cache (fast)
 --
+-- NOTE: You might only see "hit" with no "read" - that's good!
+--   • "shared hit=5" alone means ALL data came from cache
+--   • "read" only appears if Postgres had to fetch from disk
+--
 -- What is a "page"?
 --   • PostgreSQL stores data in 8KB pages
 --   • Each buffer hit/read = one 8KB page
 --
 -- Why this matters:
 --   • Disk reads are ~100x slower than memory hits
---   • High "read" count = query might be slow on cold cache
---   • High "hit" count = data was already cached, fast!
+--   • "read" appears = data wasn't cached, slower first run
+--   • Only "hit" = data was cached, consistently fast
 --
--- First run vs. repeated runs:
---   • First run: mostly "read" (loading from disk)
---   • Repeated runs: mostly "hit" (already in cache)
---   • Test with cold cache to see real-world performance
+-- When you'll see "read":
+--   • First query after server restart
+--   • Accessing data not touched recently
+--   • Large queries that exceed cache size
 -- ============================================================================
 
 -- Shows how much data was read
@@ -229,6 +233,64 @@ LIMIT 20;
 -- ----------------------------------------------------------------------------
 
 -- ============================================================================
+-- WHEN DO ESTIMATES GO WRONG?
+-- ============================================================================
+--
+-- Estimates become inaccurate when:
+--   1. Data changed significantly (bulk INSERT/UPDATE/DELETE)
+--   2. Autovacuum hasn't run ANALYZE yet
+--   3. Querying JSONB/array contents (Postgres can't see inside)
+--
+-- For regular columns: ANALYZE fixes the problem
+-- For JSONB internals: ANALYZE alone does NOT help (see below)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Demo: ANALYZE Fixes Stale Statistics (Regular Columns)
+-- ----------------------------------------------------------------------------
+
+-- Simulate stale statistics by inserting data
+-- (In real life, this happens after bulk loads)
+
+-- First, let's see how many rating=10 exist and what Postgres estimates
+EXPLAIN ANALYZE
+SELECT * FROM ratings WHERE rating = 10;
+
+-- Note the estimated rows vs actual rows - should be close
+
+-- Now insert a LOT of rating=10 rows (simulating a bulk load)
+INSERT INTO ratings (movie_id, user_id, rating, rated_at)
+SELECT
+    (SELECT movie_id FROM movies ORDER BY random() LIMIT 1),
+    (SELECT user_id FROM users ORDER BY random() LIMIT 1),
+    10,  -- All rating=10
+    NOW()
+FROM generate_series(1, 5000);
+
+-- Check again - estimate is now WRONG (doesn't know about new rows)
+EXPLAIN ANALYZE
+SELECT * FROM ratings WHERE rating = 10;
+
+-- The estimate is based on OLD statistics - Postgres doesn't know we just
+-- added 5000 rows with rating=10!
+
+-- Fix with ANALYZE
+ANALYZE ratings;
+
+-- Now the estimate should be much closer to actual rows
+EXPLAIN ANALYZE
+SELECT * FROM ratings WHERE rating = 10;
+
+-- Clean up our test data
+DELETE FROM ratings WHERE review_title IS NULL AND rated_at > NOW() - INTERVAL '1 minute';
+ANALYZE ratings;
+
+
+-- ----------------------------------------------------------------------------
+-- Demo: JSONB - Where ANALYZE Alone Doesn't Help
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
 -- WHY JSONB ESTIMATES ARE OFTEN WRONG
 -- ============================================================================
 --
@@ -242,40 +304,44 @@ LIMIT 20;
 --   • It uses a default estimate (often 0.1% or 1% of rows)
 --   • This guess can be wildly wrong!
 --
--- Result: estimated rows might say 5, actual rows might be 500
---         Postgres chose a plan for 5 rows, but got 500 = slow!
+-- IMPORTANT: Running ANALYZE alone does NOT help JSONB internals!
+--   • ANALYZE samples the metadata column
+--   • But it only sees "this is JSONB data"
+--   • It does NOT look inside to count language='French' occurrences
 --
--- Solutions:
---   1. Run ANALYZE (helps a little)
---   2. Create expression index: CREATE INDEX ON movies((metadata->>'language'))
---   3. Create extended statistics (PostgreSQL 12+)
+-- Solutions that actually work:
+--   1. Expression index (forces Postgres to track stats on extracted value):
+--      CREATE INDEX idx_movies_language ON movies((metadata->>'language'));
+--      ANALYZE movies;  -- NOW it collects stats on the expression!
+--
+--   2. Extended statistics (PostgreSQL 14+):
+--      CREATE STATISTICS movies_lang_stats ON (metadata->>'language') FROM movies;
+--      ANALYZE movies;
 -- ============================================================================
 
--- When estimates are wrong, plans can be terrible
--- Let's create a scenario with bad estimates
-
--- First, check a query
+-- Check a JSONB query - notice estimated vs actual rows
 EXPLAIN ANALYZE
 SELECT * FROM movies
 WHERE metadata->>'language' = 'French';
 
--- The estimate might be way off because Postgres
--- doesn't know the distribution of JSONB values
-
-
--- ----------------------------------------------------------------------------
--- Demo: Fixing with ANALYZE
--- ----------------------------------------------------------------------------
-
--- Update statistics
+-- Try running ANALYZE - it won't help!
 ANALYZE movies;
 
--- Try the query again
+-- Check again - estimates STILL wrong
 EXPLAIN ANALYZE
 SELECT * FROM movies
 WHERE metadata->>'language' = 'French';
 
--- Estimates should be better now
+-- Why? ANALYZE looked at the metadata column but didn't peek inside the JSONB.
+
+-- Fix: Create an expression index
+CREATE INDEX IF NOT EXISTS idx_movies_language ON movies((metadata->>'language'));
+ANALYZE movies;
+
+-- NOW the estimate should be accurate (and query faster too!)
+EXPLAIN ANALYZE
+SELECT * FROM movies
+WHERE metadata->>'language' = 'French';
 
 
 -- ----------------------------------------------------------------------------
