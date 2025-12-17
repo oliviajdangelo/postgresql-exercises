@@ -11,11 +11,43 @@
 --   Section 4: Course Wrap-up (10 min)
 --   ** SURVEY: 10 min reserved for student evaluations **
 --   Total: ~110 minutes + 10 min survey
+--
+-- TABLE SIZES (approximate):
+--   movies           ~500 rows      (small - often uses Seq Scan)
+--   people           ~300 rows      (small)
+--   users            ~5,000 rows    (medium)
+--   genres           15 rows        (very small)
+--   movie_genres     ~1,000 rows    (1-4 per movie)
+--   movie_cast       ~3,000 rows    (3-8 per movie)
+--   ratings          ~50,000+ rows  (large - good for index demos)
+--   watchlist        ~75,000 rows   (large)
+--   popularity_cache 500 rows       (one per movie)
 -- ============================================================================
 
 
 -- ============================================================================
 -- SECTION 1: Exploring Architecture (30 min)
+-- ============================================================================
+
+-- ============================================================================
+-- KEY CONCEPT: PostgreSQL Memory Settings
+-- ============================================================================
+--
+-- Shared Memory (shared by all connections):
+--   shared_buffers     - Main data cache (start with 25% of RAM)
+--   wal_buffers        - Write-ahead log buffer
+--
+-- Per-Connection Memory (multiplied by number of connections!):
+--   work_mem           - Memory for sorts, hashes, joins (default 4MB)
+--   maintenance_work_mem - Memory for VACUUM, CREATE INDEX
+--
+-- IMPORTANT: work_mem is per-OPERATION, not per-query!
+--   A complex query with 5 sorts could use 5 × work_mem
+--   100 connections × 5 operations × 64MB work_mem = 32GB!
+--
+-- Context values (from pg_settings):
+--   'postmaster' = requires restart to change
+--   'user' = can change per-session with SET
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -94,6 +126,7 @@ SELECT * FROM pg_stat_wal;
 -- ----------------------------------------------------------------------------
 
 -- ** ESSENTIAL ** Exercise 1a: Find the total size of all tables and indexes combined
+-- Hint: Use pg_stat_user_tables and pg_total_relation_size()
 
 -- YOUR CODE HERE:
 
@@ -221,85 +254,177 @@ ORDER BY avg_rating DESC;
 -- SECTION 3: Final Challenge - Full Diagnostic (50 min) ** ESSENTIAL **
 -- ============================================================================
 
+-- ============================================================================
+-- KEY CONCEPT: The Diagnostic Workflow
+-- ============================================================================
+--
+-- This is the workflow you'll use on the job:
+--
+--   ┌─────────────────────────────────────────────────────────────────────┐
+--   │  1. FIND        →  2. DIAGNOSE     →  3. FIX        →  4. VERIFY   │
+--   │  pg_stat_          EXPLAIN             Add index,       Re-run      │
+--   │  statements         ANALYZE             ANALYZE,         EXPLAIN     │
+--   │                                         rewrite                      │
+--   └─────────────────────────────────────────────────────────────────────┘
+--
+-- What to look for in EXPLAIN ANALYZE:
+--   • Seq Scan on large table - needs index?
+--   • rows=100 (actual rows=50000) - stale statistics, run ANALYZE
+--   • Sort Method: external merge - work_mem too low
+--   • Nested Loop with high row counts - might need Hash Join
+--
+-- Common fixes:
+--   • CREATE INDEX on filtered/joined columns
+--   • ANALYZE table_name to refresh statistics
+--   • Rewrite query (avoid correlated subqueries, leading wildcards)
+-- ============================================================================
+
 /*
 ** THIS IS THE CAPSTONE EXERCISE - COMPLETE ALL STEPS **
 
-SCENARIO: You're brought in to troubleshoot a slow database.
-Use everything you've learned this week to diagnose and fix the problems.
-
-Work through these steps:
-1. Find the slow queries
-2. Diagnose why they're slow
-3. Implement fixes
-4. Verify improvements
+SCENARIO: You're troubleshooting a slow database.
+First, use pg_stat_statements to FIND the slow queries.
+Then, use EXPLAIN ANALYZE to DIAGNOSE why they're slow.
+Finally, FIX them and VERIFY the improvement.
 */
 
+
+-- ============================================================================
+-- STEP 1: SEED SLOW QUERIES (run this first!)
+-- ============================================================================
+
+-- Run the seed script to generate slow query data:
+--   \i datasets/seed_slow_queries.sql
+--
+-- This runs various slow queries so pg_stat_statements has data to analyze.
+
+
+-- ============================================================================
+-- STEP 2: FIND - Use pg_stat_statements
+-- ============================================================================
+
+-- Find the slowest queries by total execution time
+SELECT
+    substring(query, 1, 60) AS query_preview,
+    calls,
+    round(total_exec_time::numeric, 2) AS total_ms,
+    round(mean_exec_time::numeric, 2) AS avg_ms
+FROM pg_stat_statements
+WHERE query NOT LIKE '%pg_stat%'
+ORDER BY total_exec_time DESC
+LIMIT 10;
+
+-- What patterns do you see? Which queries are taking the most time?
+-- YOUR NOTES:
+
+
+
+-- ============================================================================
+-- STEP 3: DIAGNOSE & FIX - Work through these problem queries
+-- ============================================================================
+
 -- ----------------------------------------------------------------------------
--- Step 1: Find the Problem Queries
+-- Problem Query 1: Slow user lookup
 -- ----------------------------------------------------------------------------
 
--- Use pg_stat_statements to find slow queries
+-- "Finding users by email is really slow"
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE email = 'user500@example.com';
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+
+-- What's the fix?
+-- YOUR CODE HERE:
+
+
+-- Verify improvement:
+-- YOUR CODE HERE:
+
+
+
+-- ----------------------------------------------------------------------------
+-- Problem Query 2: Slow rating aggregation
+-- ----------------------------------------------------------------------------
+
+-- "Getting average ratings per movie takes forever"
+EXPLAIN ANALYZE
+SELECT movie_id, AVG(rating), COUNT(*)
+FROM ratings
+GROUP BY movie_id
+ORDER BY AVG(rating) DESC
+LIMIT 20;
+
+-- What's the problem? (Check: Seq Scan? Sort method?)
+-- YOUR DIAGNOSIS:
+
+
+-- What's the fix?
+-- YOUR CODE HERE:
+
+
+-- Verify improvement:
+-- YOUR CODE HERE:
+
+
+
+-- ----------------------------------------------------------------------------
+-- Problem Query 3: Slow JSONB lookup
+-- ----------------------------------------------------------------------------
+
+-- "Searching movies by streaming platform is slow"
+-- NOTE: movies table is small (500 rows), so Postgres may choose Seq Scan anyway.
+-- The expression index becomes important as the table grows.
+EXPLAIN ANALYZE
+SELECT title, metadata->>'streaming' AS platform
+FROM movies
+WHERE metadata->>'streaming' = 'Streamly';
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+
+-- What's the fix? (Hint: What kind of index helps JSONB expressions?)
+-- YOUR CODE HERE:
+
+
+-- Verify improvement:
 -- YOUR CODE HERE:
 
 
 
 
 -- ----------------------------------------------------------------------------
--- Step 2: Pick Your Top Target
+-- Problem Query 4: Slow watchlist lookup
 -- ----------------------------------------------------------------------------
 
--- Choose one slow query and run EXPLAIN ANALYZE on it
+-- "Checking if a user has a movie in their watchlist is slow"
+EXPLAIN ANALYZE
+SELECT * FROM watchlist
+WHERE user_id = 100 AND movie_id = 50;
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+
+-- What's the fix?
+-- YOUR CODE HERE:
+
+
+-- Verify improvement:
 -- YOUR CODE HERE:
 
 
 
-
 -- ----------------------------------------------------------------------------
--- Step 3: Diagnose the Problem
+-- Bonus: Check Table Statistics
 -- ----------------------------------------------------------------------------
 
-/*
-Ask yourself:
-- Is there a sequential scan on a large table?
-- Are the row estimates accurate?
-- Is there a missing index?
-- Are statistics up to date?
-- Any sorts using disk?
-*/
-
--- Check table statistics freshness
+-- Are statistics fresh? (Check last_analyze column)
 SELECT relname, last_analyze, n_live_tup
-FROM pg_stat_user_tables;
-
--- Check for missing indexes (columns frequently filtered but not indexed)
--- YOUR ANALYSIS HERE:
-
-
-
-
--- ----------------------------------------------------------------------------
--- Step 4: Implement Fixes
--- ----------------------------------------------------------------------------
-
--- Based on your diagnosis, implement fixes
--- Examples:
--- CREATE INDEX ...
--- ANALYZE table_name;
--- Rewrite query
-
--- YOUR CODE HERE:
-
-
-
-
--- ----------------------------------------------------------------------------
--- Step 5: Verify Improvement
--- ----------------------------------------------------------------------------
-
--- Re-run EXPLAIN ANALYZE on your target query
--- Compare before and after
-
--- YOUR CODE HERE:
+FROM pg_stat_user_tables
+ORDER BY last_analyze NULLS FIRST;
 
 
 
@@ -308,15 +433,23 @@ FROM pg_stat_user_tables;
 -- (Optional) Bonus Challenge: Lock Investigation
 -- ----------------------------------------------------------------------------
 
--- Check if there are any blocking queries
+-- Check if there are any blocking queries (joins through pg_locks to find actual blocker)
 SELECT
-    blocked.pid AS blocked_pid,
-    blocked.query AS blocked_query,
-    blocking.pid AS blocking_pid,
-    blocking.query AS blocking_query
-FROM pg_stat_activity blocked
-JOIN pg_stat_activity blocking ON blocking.pid != blocked.pid
-WHERE blocked.wait_event_type = 'Lock';
+    blocked_locks.pid AS blocked_pid,
+    blocked_activity.query AS blocked_query,
+    blocking_locks.pid AS blocking_pid,
+    blocking_activity.query AS blocking_query
+FROM pg_locks blocked_locks
+JOIN pg_stat_activity blocked_activity
+    ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_locks blocking_locks
+    ON blocking_locks.locktype = blocked_locks.locktype
+    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+    AND blocking_locks.pid != blocked_locks.pid
+JOIN pg_stat_activity blocking_activity
+    ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted
+  AND blocking_locks.granted;
 
 -- Check for long-running transactions
 SELECT
@@ -435,6 +568,26 @@ FROM pg_statio_user_indexes
 WHERE idx_blks_hit + idx_blks_read > 0
 ORDER BY hit_ratio;
 
--- Final challenge solutions will vary based on
--- which queries students choose to optimize
+-- Capstone Problem Query Solutions:
+
+-- Problem 1: Slow user lookup
+-- Problem: Seq Scan on users table
+-- Fix:
+CREATE INDEX idx_users_email ON users(email);
+
+-- Problem 2: Slow rating aggregation
+-- Problem: Seq Scan on ratings, possibly disk sort
+-- Fix: Index on movie_id helps the GROUP BY
+CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
+-- Also try: SET work_mem = '64MB'; if sort spills to disk
+
+-- Problem 3: Slow JSONB lookup
+-- Problem: Seq Scan, can't use regular index on JSONB expression
+-- Fix: Expression index on the JSONB path
+CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
+
+-- Problem 4: Slow watchlist lookup
+-- Problem: Seq Scan on watchlist (75K rows)
+-- Fix: Composite index on both columns
+CREATE INDEX idx_watchlist_user_movie ON watchlist(user_id, movie_id);
 */
