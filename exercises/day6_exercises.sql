@@ -385,18 +385,14 @@ SELECT * FROM users WHERE email = 'user500@example.com';
 
 
 -- ----------------------------------------------------------------------------
--- Problem Query 2: Slow rating aggregation
+-- Problem Query 2: Slow rating lookup by movie
 -- ----------------------------------------------------------------------------
 
--- "Getting average ratings per movie takes forever"
+-- "Finding all ratings for a specific movie is slow"
 EXPLAIN ANALYZE
-SELECT movie_id, AVG(rating), COUNT(*)
-FROM ratings
-GROUP BY movie_id
-ORDER BY AVG(rating) DESC
-LIMIT 20;
+SELECT * FROM ratings WHERE movie_id = 100;
 
--- What's the problem? (Check: Seq Scan? Sort method?)
+-- What's the problem?
 -- YOUR DIAGNOSIS:
 
 
@@ -615,11 +611,10 @@ ORDER BY hit_ratio;
 -- Fix:
 CREATE INDEX idx_users_email ON users(email);
 
--- Problem 2: Slow rating aggregation
--- Problem: Seq Scan on ratings, possibly disk sort
--- Fix: Index on movie_id helps the GROUP BY
+-- Problem 2: Slow rating lookup by movie
+-- Problem: Seq Scan on ratings (57K rows), filtering by movie_id
+-- Fix: Index on the filter column
 CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
--- Also try: SET work_mem = '64MB'; if sort spills to disk
 
 -- Problem 3: Slow JSONB lookup
 -- Problem: Seq Scan, can't use regular index on JSONB expression

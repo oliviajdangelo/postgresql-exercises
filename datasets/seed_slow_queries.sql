@@ -73,17 +73,19 @@ SELECT * FROM users WHERE email = 'user400@example.com';
 
 
 -- ============================================================================
--- 4. LARGE TABLE AGGREGATION
+-- 4. RATING LOOKUP BY MOVIE (no index on movie_id after reset)
 -- ============================================================================
--- Aggregating 50K+ rows in ratings table
+-- Filtering 57K rows by movie_id
 
-SELECT movie_id, AVG(rating), COUNT(*) FROM ratings GROUP BY movie_id;
-SELECT movie_id, AVG(rating), COUNT(*) FROM ratings GROUP BY movie_id;
-SELECT movie_id, AVG(rating), COUNT(*) FROM ratings GROUP BY movie_id;
-
-SELECT user_id, AVG(rating), COUNT(*) FROM ratings GROUP BY user_id;
-SELECT user_id, AVG(rating), COUNT(*) FROM ratings GROUP BY user_id;
-SELECT user_id, AVG(rating), COUNT(*) FROM ratings GROUP BY user_id;
+SELECT * FROM ratings WHERE movie_id = 100;
+SELECT * FROM ratings WHERE movie_id = 100;
+SELECT * FROM ratings WHERE movie_id = 100;
+SELECT * FROM ratings WHERE movie_id = 200;
+SELECT * FROM ratings WHERE movie_id = 200;
+SELECT * FROM ratings WHERE movie_id = 200;
+SELECT * FROM ratings WHERE movie_id = 300;
+SELECT * FROM ratings WHERE movie_id = 300;
+SELECT * FROM ratings WHERE movie_id = 300;
 
 
 -- ============================================================================
