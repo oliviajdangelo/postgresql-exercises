@@ -290,7 +290,29 @@ Finally, FIX them and VERIFY the improvement.
 
 
 -- ============================================================================
--- STEP 1: SEED SLOW QUERIES (run this first!)
+-- STEP 0: RESET THE ENVIRONMENT (run this first!)
+-- ============================================================================
+
+-- Drop any indexes created during previous exercises so everyone starts fresh.
+-- This ensures you'll see Seq Scans where expected.
+
+DROP INDEX IF EXISTS idx_users_email;
+DROP INDEX IF EXISTS idx_ratings_movie_id;
+DROP INDEX IF EXISTS idx_ratings_rated_at;
+DROP INDEX IF EXISTS idx_movies_streaming;
+
+-- Reset pg_stat_statements so we start with clean data
+SELECT pg_stat_statements_reset();
+
+-- Refresh table statistics
+ANALYZE users;
+ANALYZE ratings;
+ANALYZE movies;
+ANALYZE watchlist;
+
+
+-- ============================================================================
+-- STEP 1: SEED SLOW QUERIES
 -- ============================================================================
 
 -- Run the seed script to generate slow query data:
