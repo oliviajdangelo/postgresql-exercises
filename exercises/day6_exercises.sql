@@ -293,13 +293,25 @@ Finally, FIX them and VERIFY the improvement.
 -- STEP 0: RESET THE ENVIRONMENT (run this first!)
 -- ============================================================================
 
--- Drop any indexes created during previous exercises so everyone starts fresh.
--- This ensures you'll see Seq Scans where expected.
+-- Drop ALL custom indexes so everyone starts fresh with the same environment.
+-- This keeps only primary keys and unique constraints.
+-- Students may have created indexes with various names during earlier exercises.
 
-DROP INDEX IF EXISTS idx_users_email;
-DROP INDEX IF EXISTS idx_ratings_movie_id;
-DROP INDEX IF EXISTS idx_ratings_rated_at;
-DROP INDEX IF EXISTS idx_movies_streaming;
+DO $$
+DECLARE
+    idx RECORD;
+BEGIN
+    FOR idx IN
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname NOT LIKE '%_pkey'      -- Keep primary keys
+          AND indexname NOT LIKE '%_key'       -- Keep unique constraints
+    LOOP
+        EXECUTE 'DROP INDEX IF EXISTS ' || idx.indexname;
+        RAISE NOTICE 'Dropped index: %', idx.indexname;
+    END LOOP;
+END $$;
 
 -- Reset pg_stat_statements so we start with clean data
 SELECT pg_stat_statements_reset();
@@ -309,6 +321,12 @@ ANALYZE users;
 ANALYZE ratings;
 ANALYZE movies;
 ANALYZE watchlist;
+
+-- Verify: You should see only primary keys and unique constraints
+SELECT tablename, indexname
+FROM pg_indexes
+WHERE schemaname = 'public'
+ORDER BY tablename, indexname;
 
 
 -- ============================================================================
