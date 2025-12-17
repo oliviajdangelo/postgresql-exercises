@@ -111,19 +111,16 @@ WHERE r.rating >= 9;
 
 
 -- ============================================================================
--- 6. WATCHLIST LOOKUP (large table, no index on user_id + movie_id)
+-- 6. DATE RANGE QUERIES (no index on rated_at)
 -- ============================================================================
 
-SELECT * FROM watchlist WHERE user_id = 100;
-SELECT * FROM watchlist WHERE user_id = 100;
-SELECT * FROM watchlist WHERE user_id = 100;
-SELECT * FROM watchlist WHERE user_id = 200;
-SELECT * FROM watchlist WHERE user_id = 200;
-SELECT * FROM watchlist WHERE user_id = 200;
+SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
+SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
+SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
 
-SELECT * FROM watchlist WHERE user_id = 100 AND movie_id = 50;
-SELECT * FROM watchlist WHERE user_id = 100 AND movie_id = 50;
-SELECT * FROM watchlist WHERE user_id = 100 AND movie_id = 50;
+SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
+SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
+SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
 
 
 -- ============================================================================

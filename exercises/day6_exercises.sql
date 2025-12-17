@@ -396,19 +396,19 @@ WHERE metadata->>'streaming' = 'Streamly';
 
 
 -- ----------------------------------------------------------------------------
--- Problem Query 4: Slow watchlist lookup
+-- Problem Query 4: Slow date range query
 -- ----------------------------------------------------------------------------
 
--- "Checking if a user has a movie in their watchlist is slow"
+-- "Finding ratings from a specific month is slow"
 EXPLAIN ANALYZE
-SELECT * FROM watchlist
-WHERE user_id = 100 AND movie_id = 50;
+SELECT * FROM ratings
+WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
 
 -- What's the problem?
 -- YOUR DIAGNOSIS:
 
 
--- What's the fix?
+-- What's the fix? (Hint: What column is being filtered?)
 -- YOUR CODE HERE:
 
 
@@ -586,8 +586,8 @@ CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
 -- Fix: Expression index on the JSONB path
 CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
 
--- Problem 4: Slow watchlist lookup
--- Problem: Seq Scan on watchlist (75K rows)
--- Fix: Composite index on both columns
-CREATE INDEX idx_watchlist_user_movie ON watchlist(user_id, movie_id);
+-- Problem 4: Slow date range query
+-- Problem: Seq Scan on ratings (57K rows), filtering by rated_at
+-- Fix: Index on the date column
+CREATE INDEX idx_ratings_rated_at ON ratings(rated_at);
 */
