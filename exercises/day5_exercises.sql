@@ -11,7 +11,24 @@
 --   Section 4: Wrap-up (5 min)
 --   Total: ~110 minutes
 --
+-- PREREQUISITES:
+--   1. pg_stat_statements must be enabled (see troubleshooting below)
+--   2. Run the seed script to generate sample slow queries:
+--      \i datasets/seed_monitoring_data.sql
+--      (This runs ~1,200 queries to populate pg_stat_statements with data to analyze)
+--
 -- NOTE: Locking demos require TWO terminal/pgAdmin sessions!
+--
+-- TABLE SIZES (approximate):
+--   movies           ~500 rows      (small - often uses Seq Scan)
+--   people           ~300 rows      (small)
+--   users            ~5,000 rows    (medium)
+--   genres           15 rows        (very small)
+--   movie_genres     ~1,000 rows    (1-4 per movie)
+--   movie_cast       ~3,000 rows    (3-8 per movie)
+--   ratings          ~50,000+ rows  (large - good for index demos)
+--   watchlist        ~75,000 rows   (large)
+--   popularity_cache 500 rows       (one per movie)
 -- ============================================================================
 
 
@@ -50,14 +67,74 @@
 -- Demo: Checking pg_stat_statements is Enabled
 -- ----------------------------------------------------------------------------
 
--- Verify the extension is installed
+-- Step 1: Verify the extension is installed
 SELECT * FROM pg_available_extensions WHERE name = 'pg_stat_statements';
 
--- Check if it's loaded
+-- Step 2: Check if it's loaded in shared_preload_libraries
 SHOW shared_preload_libraries;
 
--- View some basic stats
+-- Step 3: Create the extension (if not already created)
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+-- Step 4: View some basic stats
 SELECT COUNT(*) FROM pg_stat_statements;
+
+-- ============================================================================
+-- TROUBLESHOOTING: What If It's Not Working?
+-- ============================================================================
+--
+-- Problem: SHOW shared_preload_libraries doesn't include pg_stat_statements
+-- Cause: Not configured on the instance (requires restart to enable)
+--
+-- Fix for Google Cloud SQL:
+--   1. Go to Cloud Console → SQL → Your Instance
+--   2. Click "Edit"
+--   3. Expand "Flags" section
+--   4. Click "Add Flag"
+--   5. Select "shared_preload_libraries"
+--   6. Set value to: pg_stat_statements
+--   7. Save and restart instance (~2-3 minutes downtime)
+--
+-- Fix for Self-managed PostgreSQL (Linux/Mac):
+--
+--   Step 1: Find your postgresql.conf location (run in psql):
+--      SHOW config_file;
+--      -- Example output: /Users/you/Library/Application Support/Postgres/var-18/postgresql.conf
+--
+--   Step 2: Edit the file (run in terminal, use your path from Step 1):
+--      # For Postgres.app on Mac:
+--      sed -i '' "s/#shared_preload_libraries = ''/shared_preload_libraries = 'pg_stat_statements'/" \
+--        "/Users/YOU/Library/Application Support/Postgres/var-18/postgresql.conf"
+--
+--      # For Linux:
+--      sudo sed -i "s/#shared_preload_libraries = ''/shared_preload_libraries = 'pg_stat_statements'/" \
+--        /etc/postgresql/16/main/postgresql.conf
+--
+--   Step 3: Verify the change (run in terminal):
+--      grep "shared_preload_libraries" "/Users/YOU/Library/Application Support/Postgres/var-18/postgresql.conf"
+--      -- Should show: shared_preload_libraries = 'pg_stat_statements'
+--
+--   Step 4: Restart PostgreSQL:
+--      # Postgres.app: Click elephant icon in menu bar → click your server → Stop,
+--      #               then click Start (or Quit app and reopen)
+--      # Homebrew: brew services restart postgresql
+--      # Linux: sudo systemctl restart postgresql
+--
+--   Step 5: Verify it worked (run in psql):
+--      SHOW shared_preload_libraries;
+--      -- Should show: pg_stat_statements
+--
+-- After restart, connect and run:
+--   CREATE EXTENSION pg_stat_statements;
+--
+-- Problem: "relation pg_stat_statements does not exist"
+-- Cause: Extension not created in this database
+-- Fix: CREATE EXTENSION pg_stat_statements;
+--
+-- Problem: Query returns 0 rows
+-- Cause: Stats were just reset or extension just enabled
+-- Fix: Run some queries, then check again
+-- ============================================================================
 
 
 -- ----------------------------------------------------------------------------
@@ -155,25 +232,66 @@ LIMIT 10;
 -- Time: 15 minutes
 -- ----------------------------------------------------------------------------
 
--- ** ESSENTIAL ** Exercise 1a: Find the top 5 queries that return the most rows on average
+-- The seed script created 9 different slow query patterns. Your job is to
+-- find them and understand WHY they're slow.
+--
+-- Seeded query patterns to look for:
+--   1. Wildcard searches (ILIKE '%...%')     - Can't use B-tree index
+--   2. JSONB metadata lookups                - No index on JSON path
+--   3. Multi-table joins with ORDER BY       - Sorting large result sets
+--   4. Aggregations with HAVING              - Scans entire table
+--   5. IN predicates on ratings              - Multiple value lookups
+--   6. JOIN + ORDER BY on people.full_name   - Missing index, forces sort
+--   7. Correlated subqueries                 - Runs subquery per row
+--   8. Array containment (@>)                - Needs GIN index
+--   9. Full-text search (@@)                 - Needs GIN index
+
+-- ** ESSENTIAL ** Exercise 1a: Find the slowest query by total time
+-- Look at the query text - which pattern from above is it?
 
 -- YOUR CODE HERE:
 
 
 
--- (Optional) Exercise 1b: Find queries with less than 90% cache hit rate
--- These might benefit from indexing or more shared_buffers
+-- ** ESSENTIAL ** Exercise 1b: Find the JSONB metadata query
+-- Hint: Look for queries containing "metadata" or "streaming"
+-- How many times was it called? What's the average time?
+
+SELECT
+    substring(query, 1, 80) AS query_preview,
+    calls,
+    round(mean_exec_time::numeric, 2) AS avg_ms
+FROM pg_stat_statements
+WHERE query ILIKE '%metadata%'
+ORDER BY total_exec_time DESC;
+
+-- What index would help this query? (Think back to Day 3)
+-- YOUR ANSWER:
+
+
+
+-- (Optional) Exercise 1c: Find the correlated subquery
+-- Hint: Look for queries with nested SELECT
+-- Why is this pattern slow?
 
 -- YOUR CODE HERE:
 
 
 
--- (Optional) Exercise 1c: Calculate the total time spent in the top 10 queries
--- as a percentage of all query time
+-- ----------------------------------------------------------------------------
+-- Demo: Resetting and Managing Statistics
+-- ----------------------------------------------------------------------------
 
--- YOUR CODE HERE:
+-- Check when stats were last reset
+SELECT stats_reset FROM pg_stat_database
+WHERE datname = current_database();
 
+-- Reset all statistics (use sparingly - clears all history!)
+-- Uncomment to run:
+-- SELECT pg_stat_statements_reset();
 
+-- After resetting, you'd need to run seed_monitoring_data.sql again
+-- to have data to analyze
 
 
 -- ============================================================================
@@ -282,17 +400,25 @@ UPDATE movies SET title = title || ' (Also Updated)' WHERE movie_id = 1;
 /*
 === SESSION A (or new session) ===
 */
--- See the blocking situation
+-- See the blocking situation (joins through pg_locks to find actual blocker)
 SELECT
-    blocked.pid AS blocked_pid,
-    blocked.query AS blocked_query,
-    blocking.pid AS blocking_pid,
-    blocking.query AS blocking_query,
-    blocked.wait_event
-FROM pg_stat_activity blocked
-JOIN pg_stat_activity blocking ON blocking.pid != blocked.pid
-WHERE blocked.wait_event_type = 'Lock'
-  AND blocked.state = 'active';
+    blocked_locks.pid AS blocked_pid,
+    blocked_activity.usename AS blocked_user,
+    blocking_locks.pid AS blocking_pid,
+    blocking_activity.usename AS blocking_user,
+    blocking_activity.client_addr AS blocking_ip,
+    blocking_activity.query AS blocking_query
+FROM pg_locks blocked_locks
+JOIN pg_stat_activity blocked_activity
+    ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_locks blocking_locks
+    ON blocking_locks.locktype = blocked_locks.locktype
+    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+    AND blocking_locks.pid != blocked_locks.pid
+JOIN pg_stat_activity blocking_activity
+    ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted
+  AND blocking_locks.granted;
 
 /*
 === SESSION A ===
@@ -346,6 +472,32 @@ SELECT
 FROM pg_stat_activity
 WHERE state = 'idle in transaction'
   AND xact_start < NOW() - INTERVAL '1 minute';
+
+
+-- ----------------------------------------------------------------------------
+-- Demo: Killing Stuck Queries
+-- ----------------------------------------------------------------------------
+
+-- Find long-running transactions (over 5 minutes)
+SELECT
+    pid,
+    age(clock_timestamp(), xact_start) AS duration,
+    state,
+    substring(query, 1, 50) AS query
+FROM pg_stat_activity
+WHERE state != 'idle'
+  AND xact_start < NOW() - INTERVAL '5 minutes';
+
+-- Cancel a query (gentle - just stops the current query)
+-- Replace 12345 with actual PID from above
+-- SELECT pg_cancel_backend(12345);
+
+-- Terminate a connection (forceful - kills the whole connection)
+-- Use only if cancel doesn't work
+-- SELECT pg_terminate_backend(12345);
+
+-- NOTE: You need appropriate permissions to cancel/terminate other sessions
+-- Superusers can cancel anyone; regular users can only cancel their own queries
 
 
 -- ----------------------------------------------------------------------------
@@ -597,13 +749,19 @@ ORDER BY n_dead_tup DESC;
 -- Let's create some dead tuples to see VACUUM in action
 BEGIN;
 -- Update a bunch of rows (creates dead tuples)
-UPDATE ratings SET rating = rating WHERE movie_id = 1;
+UPDATE ratings SET rating = rating WHERE movie_id IN (1, 2, 3, 4, 5);
 COMMIT;
+
+-- Force statistics update (pg_stat_user_tables isn't updated instantly)
+ANALYZE ratings;
 
 -- Check dead tuples increased
 SELECT relname, n_dead_tup, n_live_tup
 FROM pg_stat_user_tables
 WHERE relname = 'ratings';
+
+-- NOTE: If n_dead_tup is 0, autovacuum may have already cleaned them up.
+-- Autovacuum runs automatically in the background.
 
 
 -- ----------------------------------------------------------------------------
@@ -749,39 +907,38 @@ TOMORROW: Architecture and performance tuning!
 -- ============================================================================
 
 /*
--- Solution 1a: Top 5 by average rows returned
+-- Solution 1a: Slowest query by total time
 SELECT
-    substring(query, 1, 60) AS query_preview,
+    substring(query, 1, 80) AS query_preview,
     calls,
-    rows / NULLIF(calls, 0) AS avg_rows
+    round(total_exec_time::numeric, 2) AS total_ms,
+    round(mean_exec_time::numeric, 2) AS avg_ms
 FROM pg_stat_statements
-ORDER BY rows / NULLIF(calls, 0) DESC
-LIMIT 5;
+WHERE query NOT LIKE '%pg_stat%'
+ORDER BY total_exec_time DESC
+LIMIT 1;
+-- Usually the multi-table join or correlated subquery
 
--- Solution 1b: Low cache hit rate
+-- Solution 1b: JSONB metadata query
 SELECT
-    substring(query, 1, 60) AS query_preview,
-    round(100.0 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, 0), 2) AS cache_hit_pct
+    substring(query, 1, 80) AS query_preview,
+    calls,
+    round(mean_exec_time::numeric, 2) AS avg_ms
 FROM pg_stat_statements
-WHERE shared_blks_hit + shared_blks_read > 100
-  AND 100.0 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, 0) < 90
-ORDER BY cache_hit_pct;
+WHERE query ILIKE '%metadata%'
+ORDER BY total_exec_time DESC;
+-- Fix: CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
 
--- Solution 1c: Top 10 percentage
-WITH total AS (
-    SELECT SUM(total_exec_time) AS total_time FROM pg_stat_statements
-),
-top10 AS (
-    SELECT SUM(total_exec_time) AS top10_time
-    FROM (
-        SELECT total_exec_time
-        FROM pg_stat_statements
-        ORDER BY total_exec_time DESC
-        LIMIT 10
-    ) t
-)
-SELECT round(100.0 * top10_time / total_time, 2) AS top10_percent
-FROM total, top10;
+-- Solution 1c: Correlated subquery
+SELECT
+    substring(query, 1, 100) AS query_preview,
+    calls,
+    round(mean_exec_time::numeric, 2) AS avg_ms
+FROM pg_stat_statements
+WHERE query ILIKE '%SELECT AVG(imdb_rating)%'
+ORDER BY total_exec_time DESC;
+-- Slow because: subquery runs once per row in outer query
+-- Fix: Rewrite as JOIN with pre-aggregated CTE
 
 -- Solution 2a: Lock conflict
 -- SESSION A: BEGIN; DELETE FROM ratings WHERE rating_id = 1;
