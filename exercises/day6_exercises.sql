@@ -347,6 +347,7 @@ SELECT
 FROM pg_stat_statements
 WHERE query NOT LIKE '%pg_stat%'
   AND query NOT LIKE '%pg_catalog%'
+  AND query NOT LIKE 'SELECT $1 AS status'
 ORDER BY total_exec_time DESC
 LIMIT 10;
 
@@ -546,7 +547,7 @@ WHERE NOT blocked_locks.granted AND blocking_locks.granted;
 -- ******************************************************************************
 -- **                        STUDENT SURVEY (10 min)                           **
 -- **                                                                          **
--- **                                                                          **
+-- **   https://www.surveymonkey.com/r/FD336K6                                 **
 -- **                                                                          **
 -- ******************************************************************************
 -- ============================================================================
