@@ -346,6 +346,7 @@ SELECT
     round(mean_exec_time::numeric, 2) AS avg_ms
 FROM pg_stat_statements
 WHERE query NOT LIKE '%pg_stat%'
+  AND query NOT LIKE '%pg_catalog%'
 ORDER BY total_exec_time DESC
 LIMIT 10;
 
