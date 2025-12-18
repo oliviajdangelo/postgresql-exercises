@@ -5,9 +5,9 @@
 -- Database: movies_db
 --
 -- TIMING:
---   Section 1: Exploring Architecture (25 min)
---   Section 2: Memory and Caching (25 min)
---   Section 3: Final Challenge - Full Diagnostic (50 min)
+--   Section 1: Final Challenge - Capstone (50 min) ** ESSENTIAL **
+--   Section 2: Exploring Architecture (25 min)
+--   Section 3: Memory and Caching (25 min)
 --   Student Survey (10 min)
 --   Total: ~110 minutes
 --
@@ -21,11 +21,331 @@
 --   ratings          ~50,000+ rows  (large - good for index demos)
 --   watchlist        ~75,000 rows   (large)
 --   popularity_cache 500 rows       (one per movie)
+--
+-- ******************************************************************************
+-- **  REMINDER: Student survey at end of class!                               **
+-- ******************************************************************************
 -- ============================================================================
 
 
 -- ============================================================================
--- SECTION 1: Exploring Architecture (30 min)
+-- SECTION 1: Final Challenge - Capstone (50 min) ** ESSENTIAL **
+-- ============================================================================
+
+-- ============================================================================
+-- KEY CONCEPT: The Diagnostic Workflow
+-- ============================================================================
+--
+-- This is the workflow you'll use on the job:
+--
+--   ┌─────────────────────────────────────────────────────────────────────┐
+--   │  1. FIND        →  2. DIAGNOSE     →  3. FIX        →  4. VERIFY   │
+--   │  pg_stat_          EXPLAIN             Add index,       Re-run      │
+--   │  statements         ANALYZE             ANALYZE,         EXPLAIN     │
+--   │                                         rewrite                      │
+--   └─────────────────────────────────────────────────────────────────────┘
+--
+-- What to look for in EXPLAIN ANALYZE:
+--   • Seq Scan on large table - needs index?
+--   • rows=100 (actual rows=50000) - stale statistics, run ANALYZE
+--   • Sort Method: external merge - work_mem too low
+--   • Nested Loop with high row counts - might need Hash Join
+--
+-- Common fixes:
+--   • CREATE INDEX on filtered/joined columns
+--   • ANALYZE table_name to refresh statistics
+--   • Rewrite query (avoid correlated subqueries, leading wildcards)
+-- ============================================================================
+
+/*
+** THIS IS THE CAPSTONE EXERCISE **
+
+SCENARIO: You inherit a "slow" database and need to fix it.
+
+Follow the diagnostic workflow from Days 4-5:
+  1. FIND    - Use pg_stat_statements to identify slow queries
+  2. DIAGNOSE - Use EXPLAIN ANALYZE to understand WHY they're slow
+  3. FIX     - Add index, refresh stats, or rewrite query
+  4. VERIFY  - Confirm the improvement
+*/
+
+
+-- ============================================================================
+-- STEP 1: RESET THE ENVIRONMENT
+-- ============================================================================
+
+-- Drop ALL custom indexes so everyone starts fresh.
+DO $$
+DECLARE
+    idx RECORD;
+BEGIN
+    FOR idx IN
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname NOT LIKE '%_pkey'
+          AND indexname NOT LIKE '%_key'
+    LOOP
+        EXECUTE 'DROP INDEX IF EXISTS ' || idx.indexname;
+        RAISE NOTICE 'Dropped index: %', idx.indexname;
+    END LOOP;
+END $$;
+
+-- Drop temp tables from previous runs
+DROP TABLE IF EXISTS recent_signups;
+
+-- Refresh table statistics
+ANALYZE users;
+ANALYZE ratings;
+ANALYZE movies;
+ANALYZE watchlist;
+
+
+-- ============================================================================
+-- STEP 2: SEED SLOW QUERIES
+-- ============================================================================
+
+-- Run the seed script to simulate production query activity:
+\i datasets/seed_slow_queries.sql
+
+-- This runs various problematic queries so pg_stat_statements has data.
+
+
+-- ============================================================================
+-- STEP 3: FIND - Identify the slow queries
+-- ============================================================================
+
+-- Query pg_stat_statements to find the slowest queries.
+-- Look at total_exec_time, calls, and mean_exec_time.
+
+SELECT
+    substring(query, 1, 80) AS query_preview,
+    calls,
+    round(total_exec_time::numeric, 2) AS total_ms,
+    round(mean_exec_time::numeric, 2) AS avg_ms
+FROM pg_stat_statements
+WHERE query NOT LIKE '%pg_stat%'
+  AND query NOT LIKE '%pg_catalog%'
+  AND query NOT LIKE 'SELECT $1 AS status'
+ORDER BY total_exec_time DESC
+LIMIT 10;
+
+-- You should see 6 slow queries. Now let's diagnose and fix each one.
+
+
+-- ============================================================================
+-- STEP 4: DIAGNOSE → FIX → VERIFY
+-- ============================================================================
+--
+-- For each query below:
+--   a) DIAGNOSE: Run the EXPLAIN ANALYZE to see the problem
+--   b) FIX: Apply the appropriate solution
+--   c) VERIFY: Re-run EXPLAIN ANALYZE to confirm improvement
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 1: Large sort spilling to disk
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE (look for "Sort Method: external merge Disk"):
+EXPLAIN ANALYZE
+SELECT * FROM ratings ORDER BY rating DESC;
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY (should show "Sort Method: quicksort Memory"):
+EXPLAIN ANALYZE
+SELECT * FROM ratings ORDER BY rating DESC;
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 2: Join without index
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE (look for Seq Scan on ratings):
+EXPLAIN ANALYZE
+SELECT m.title, m.release_year, COUNT(r.rating_id)
+FROM movies m
+JOIN ratings r ON r.movie_id = m.movie_id
+WHERE m.release_year >= 2020
+GROUP BY m.movie_id, m.title, m.release_year
+ORDER BY COUNT(r.rating_id) DESC
+LIMIT 10;
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+EXPLAIN ANALYZE
+SELECT m.title, m.release_year, COUNT(r.rating_id)
+FROM movies m
+JOIN ratings r ON r.movie_id = m.movie_id
+WHERE m.release_year >= 2020
+GROUP BY m.movie_id, m.title, m.release_year
+ORDER BY COUNT(r.rating_id) DESC
+LIMIT 10;
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 3: Function on column prevents index use
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE (look for Seq Scan):
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX (hint: rewrite the query, don't create an index):
+-- YOUR CODE HERE:
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 4: Missing index on email
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE:
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE email = 'user500@example.com';
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE email = 'user500@example.com';
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 5: JSONB expression without index
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE:
+EXPLAIN ANALYZE
+SELECT title, metadata->>'streaming' FROM movies
+WHERE metadata->>'streaming' = 'Streamly';
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+EXPLAIN ANALYZE
+SELECT title, metadata->>'streaming' FROM movies
+WHERE metadata->>'streaming' = 'Streamly';
+
+
+-- ----------------------------------------------------------------------------
+-- QUERY 6: Array containment without GIN index
+-- ----------------------------------------------------------------------------
+
+-- DIAGNOSE:
+EXPLAIN ANALYZE
+SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY (note: with only 500 rows, Postgres may still choose Seq Scan):
+EXPLAIN ANALYZE
+SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
+
+
+
+
+-- ============================================================================
+-- BONUS CHALLENGES (if time permits)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Bonus 1: Stale Statistics Scenario
+-- ----------------------------------------------------------------------------
+
+-- Create a new table WITHOUT running ANALYZE:
+DROP TABLE IF EXISTS recent_signups;
+CREATE TABLE recent_signups AS
+SELECT user_id, username, email, created_at
+FROM users
+WHERE created_at >= '2024-01-01';
+
+-- Check that Postgres has no stats yet:
+SELECT relname, n_live_tup, last_analyze
+FROM pg_stat_user_tables
+WHERE relname = 'recent_signups';
+
+-- Look at the row estimate vs actual:
+EXPLAIN ANALYZE
+SELECT * FROM recent_signups WHERE created_at >= '2024-06-01';
+
+-- Fix it and verify the estimates improve:
+-- YOUR CODE HERE:
+
+
+
+-- ----------------------------------------------------------------------------
+-- Bonus 2: Function Preventing Index Use
+-- ----------------------------------------------------------------------------
+
+-- Create an index on created_at:
+CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at);
+
+-- This query CAN'T use the index (function wraps the column):
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+
+-- Rewrite the query so it CAN use the index:
+-- YOUR CODE HERE:
+
+
+
+-- ----------------------------------------------------------------------------
+-- Bonus 3: Check for Lock Contention
+-- ----------------------------------------------------------------------------
+
+-- Are any queries blocking each other right now?
+SELECT
+    blocked_locks.pid AS blocked_pid,
+    blocked_activity.query AS blocked_query,
+    blocking_locks.pid AS blocking_pid,
+    blocking_activity.query AS blocking_query
+FROM pg_locks blocked_locks
+JOIN pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_locks blocking_locks
+    ON blocking_locks.locktype = blocked_locks.locktype
+    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+    AND blocking_locks.pid != blocked_locks.pid
+JOIN pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted AND blocking_locks.granted;
+
+
+
+
+-- ============================================================================
+-- ******************************************************************************
+-- **                  REMINDER: Student survey at end of class!              **
+-- ******************************************************************************
+-- ============================================================================
+
+
+-- ============================================================================
+-- SECTION 2: Exploring Architecture (25 min)
 -- ============================================================================
 
 -- ============================================================================
@@ -147,7 +467,7 @@ SELECT * FROM pg_stat_wal;
 
 
 -- ============================================================================
--- SECTION 2: Memory and Caching (30 min)
+-- SECTION 3: Memory and Caching (25 min)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -247,310 +567,6 @@ ORDER BY avg_rating DESC;
 -- YOUR CODE HERE:
 
 
-
-
--- ============================================================================
--- SECTION 3: Final Challenge - Full Diagnostic (50 min) ** ESSENTIAL **
--- ============================================================================
-
--- ============================================================================
--- KEY CONCEPT: The Diagnostic Workflow
--- ============================================================================
---
--- This is the workflow you'll use on the job:
---
---   ┌─────────────────────────────────────────────────────────────────────┐
---   │  1. FIND        →  2. DIAGNOSE     →  3. FIX        →  4. VERIFY   │
---   │  pg_stat_          EXPLAIN             Add index,       Re-run      │
---   │  statements         ANALYZE             ANALYZE,         EXPLAIN     │
---   │                                         rewrite                      │
---   └─────────────────────────────────────────────────────────────────────┘
---
--- What to look for in EXPLAIN ANALYZE:
---   • Seq Scan on large table - needs index?
---   • rows=100 (actual rows=50000) - stale statistics, run ANALYZE
---   • Sort Method: external merge - work_mem too low
---   • Nested Loop with high row counts - might need Hash Join
---
--- Common fixes:
---   • CREATE INDEX on filtered/joined columns
---   • ANALYZE table_name to refresh statistics
---   • Rewrite query (avoid correlated subqueries, leading wildcards)
--- ============================================================================
-
-/*
-** THIS IS THE CAPSTONE EXERCISE **
-
-SCENARIO: You inherit a "slow" database and need to fix it.
-
-Follow the diagnostic workflow from Days 4-5:
-  1. FIND    - Use pg_stat_statements to identify slow queries
-  2. DIAGNOSE - Use EXPLAIN ANALYZE to understand WHY they're slow
-  3. FIX     - Add index, refresh stats, or rewrite query
-  4. VERIFY  - Confirm the improvement
-*/
-
-
--- ============================================================================
--- STEP 1: RESET THE ENVIRONMENT
--- ============================================================================
-
--- Drop ALL custom indexes so everyone starts fresh.
-DO $$
-DECLARE
-    idx RECORD;
-BEGIN
-    FOR idx IN
-        SELECT indexname
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND indexname NOT LIKE '%_pkey'
-          AND indexname NOT LIKE '%_key'
-    LOOP
-        EXECUTE 'DROP INDEX IF EXISTS ' || idx.indexname;
-        RAISE NOTICE 'Dropped index: %', idx.indexname;
-    END LOOP;
-END $$;
-
--- Drop temp tables from previous runs
-DROP TABLE IF EXISTS recent_signups;
-
--- Refresh table statistics
-ANALYZE users;
-ANALYZE ratings;
-ANALYZE movies;
-ANALYZE watchlist;
-
-
--- ============================================================================
--- STEP 2: SEED SLOW QUERIES
--- ============================================================================
-
--- Run the seed script to simulate production query activity:
-\i datasets/seed_slow_queries.sql
-
--- This runs various problematic queries so pg_stat_statements has data.
-
-
--- ============================================================================
--- STEP 3: FIND - Identify the slow queries
--- ============================================================================
-
--- Query pg_stat_statements to find the slowest queries.
--- Look at total_exec_time, calls, and mean_exec_time.
-
-SELECT
-    substring(query, 1, 80) AS query_preview,
-    calls,
-    round(total_exec_time::numeric, 2) AS total_ms,
-    round(mean_exec_time::numeric, 2) AS avg_ms
-FROM pg_stat_statements
-WHERE query NOT LIKE '%pg_stat%'
-  AND query NOT LIKE '%pg_catalog%'
-  AND query NOT LIKE 'SELECT $1 AS status'
-ORDER BY total_exec_time DESC
-LIMIT 10;
-
--- What do you see? Write down the problematic queries you'll investigate:
---
--- Query 1: _______________________________________________________________
--- Query 2: _______________________________________________________________
--- Query 3: _______________________________________________________________
--- Query 4: _______________________________________________________________
--- Query 5: _______________________________________________________________
-
-
--- ============================================================================
--- STEP 4: DIAGNOSE → FIX → VERIFY
--- ============================================================================
---
--- For EACH slow query you found above, follow these steps:
---
---   a) DIAGNOSE: Run EXPLAIN ANALYZE on the query
---      - What scan type is it using? (Seq Scan, Index Scan, etc.)
---      - Are the row estimates accurate?
---      - Where is the time being spent?
---
---   b) FIX: Apply the appropriate solution
---      - Missing index? → CREATE INDEX
---      - Stale statistics? → ANALYZE
---      - Function on column? → Rewrite the query
---
---   c) VERIFY: Run EXPLAIN ANALYZE again
---      - Did the plan change?
---      - Is it faster?
---
--- Work through as many queries as time allows. Solutions are at the bottom.
--- ============================================================================
-
-
--- ----------------------------------------------------------------------------
--- Your Investigation Space
--- ----------------------------------------------------------------------------
-
--- QUERY 1:
--- Copy a slow query from pg_stat_statements and diagnose it here.
-
--- DIAGNOSE:
--- EXPLAIN ANALYZE
--- <paste query here>
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
--- FIX:
--- YOUR CODE HERE:
-
--- VERIFY:
--- EXPLAIN ANALYZE
--- <paste query here again>
-
-
--- QUERY 2:
-
--- DIAGNOSE:
--- EXPLAIN ANALYZE
--- <paste query here>
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
--- FIX:
--- YOUR CODE HERE:
-
--- VERIFY:
--- EXPLAIN ANALYZE
--- <paste query here again>
-
-
--- QUERY 3:
-
--- DIAGNOSE:
--- EXPLAIN ANALYZE
--- <paste query here>
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
--- FIX:
--- YOUR CODE HERE:
-
--- VERIFY:
--- EXPLAIN ANALYZE
--- <paste query here again>
-
-
--- QUERY 4:
-
--- DIAGNOSE:
--- EXPLAIN ANALYZE
--- <paste query here>
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
--- FIX:
--- YOUR CODE HERE:
-
--- VERIFY:
--- EXPLAIN ANALYZE
--- <paste query here again>
-
-
--- QUERY 5:
-
--- DIAGNOSE:
--- EXPLAIN ANALYZE
--- <paste query here>
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
--- FIX:
--- YOUR CODE HERE:
-
--- VERIFY:
--- EXPLAIN ANALYZE
--- <paste query here again>
-
-
-
-
--- ============================================================================
--- BONUS CHALLENGES (if time permits)
--- ============================================================================
-
--- ----------------------------------------------------------------------------
--- Bonus 1: Stale Statistics Scenario
--- ----------------------------------------------------------------------------
-
--- Create a new table WITHOUT running ANALYZE:
-DROP TABLE IF EXISTS recent_signups;
-CREATE TABLE recent_signups AS
-SELECT user_id, username, email, created_at
-FROM users
-WHERE created_at >= '2024-01-01';
-
--- Check that Postgres has no stats yet:
-SELECT relname, n_live_tup, last_analyze
-FROM pg_stat_user_tables
-WHERE relname = 'recent_signups';
-
--- Look at the row estimate vs actual:
-EXPLAIN ANALYZE
-SELECT * FROM recent_signups WHERE created_at >= '2024-06-01';
-
--- Fix it and verify the estimates improve:
--- YOUR CODE HERE:
-
-
-
--- ----------------------------------------------------------------------------
--- Bonus 2: Function Preventing Index Use
--- ----------------------------------------------------------------------------
-
--- Create an index on created_at:
-CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at);
-
--- This query CAN'T use the index (function wraps the column):
-EXPLAIN ANALYZE
-SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
-
--- Rewrite the query so it CAN use the index:
--- YOUR CODE HERE:
-
-
-
--- ----------------------------------------------------------------------------
--- Bonus 3: Check for Lock Contention
--- ----------------------------------------------------------------------------
-
--- Are any queries blocking each other right now?
-SELECT
-    blocked_locks.pid AS blocked_pid,
-    blocked_activity.query AS blocked_query,
-    blocking_locks.pid AS blocking_pid,
-    blocking_activity.query AS blocking_query
-FROM pg_locks blocked_locks
-JOIN pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
-JOIN pg_locks blocking_locks
-    ON blocking_locks.locktype = blocked_locks.locktype
-    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
-    AND blocking_locks.pid != blocked_locks.pid
-JOIN pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
-WHERE NOT blocked_locks.granted AND blocking_locks.granted;
-
-
-
-
--- ============================================================================
--- ******************************************************************************
--- **                        STUDENT SURVEY (10 min)                           **
--- **                                                                          **
--- **   https://www.surveymonkey.com/r/FD336K6                                 **
--- **                                                                          **
--- ******************************************************************************
--- ============================================================================
 
 
 -- ============================================================================
