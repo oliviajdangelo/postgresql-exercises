@@ -145,17 +145,17 @@ LIMIT 10;
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 1: Large sort spilling to disk
+-- QUERY 1
 -- ----------------------------------------------------------------------------
 
--- DIAGNOSE (look for "Sort Method: external merge Disk"):
+-- DIAGNOSE (hint: look for "Sort Method: external merge Disk"):
 EXPLAIN ANALYZE
 SELECT * FROM ratings ORDER BY rating DESC;
 
 -- What's the problem?
 -- YOUR DIAGNOSIS:
 
--- FIX:
+-- FIX (hint: this is a memory setting, not an index):
 -- YOUR CODE HERE:
 
 -- VERIFY (should show "Sort Method: quicksort Memory"):
@@ -164,10 +164,10 @@ SELECT * FROM ratings ORDER BY rating DESC;
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 2: Join without index
+-- QUERY 2
 -- ----------------------------------------------------------------------------
 
--- DIAGNOSE (look for Seq Scan on ratings):
+-- DIAGNOSE:
 EXPLAIN ANALYZE
 SELECT m.title, m.release_year, COUNT(r.rating_id)
 FROM movies m
@@ -195,22 +195,22 @@ LIMIT 10;
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 3: Function on column prevents index use
+-- QUERY 3
 -- ----------------------------------------------------------------------------
 
--- DIAGNOSE (look for Seq Scan):
+-- DIAGNOSE:
 EXPLAIN ANALYZE
 SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
 
 -- What's the problem?
 -- YOUR DIAGNOSIS:
 
--- FIX (hint: rewrite the query, don't create an index):
+-- FIX:
 -- YOUR CODE HERE:
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 4: Missing index on email
+-- QUERY 4
 -- ----------------------------------------------------------------------------
 
 -- DIAGNOSE:
@@ -229,7 +229,7 @@ SELECT * FROM users WHERE email = 'user500@example.com';
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 5: JSONB expression without index
+-- QUERY 5
 -- ----------------------------------------------------------------------------
 
 -- DIAGNOSE:
@@ -250,7 +250,7 @@ WHERE metadata->>'streaming' = 'Streamly';
 
 
 -- ----------------------------------------------------------------------------
--- QUERY 6: Array containment without GIN index
+-- QUERY 6
 -- ----------------------------------------------------------------------------
 
 -- DIAGNOSE:
@@ -263,7 +263,7 @@ SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
 -- FIX:
 -- YOUR CODE HERE:
 
--- VERIFY (note: with only 500 rows, Postgres may still choose Seq Scan):
+-- VERIFY:
 EXPLAIN ANALYZE
 SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
 
