@@ -614,57 +614,165 @@ ORDER BY hit_ratio;
 -- ============================================================================
 -- CAPSTONE SOLUTIONS (For Instructor Reference)
 -- ============================================================================
--- These are the queries seeded by seed_slow_queries.sql and their fixes.
--- Students should discover these by querying pg_stat_statements.
-
--- SLOW QUERY: SELECT * FROM users WHERE email = $1
--- Diagnosis: Seq Scan on users (5K rows), filtering by email
--- Fix: B-Tree index on email column
-CREATE INDEX idx_users_email ON users(email);
+-- Solutions are in the same order as the capstone queries (1-6).
 
 
--- SLOW QUERY: SELECT title, tags FROM movies WHERE tags @> $1
--- Diagnosis: Seq Scan on movies, array containment check
--- Fix: GIN index for array operations
-CREATE INDEX idx_movies_tags ON movies USING GIN(tags);
--- Note: With only 500 rows, Postgres may still choose Seq Scan. That's OK!
+-- QUERY 1: SELECT * FROM ratings ORDER BY rating DESC
+-- ============================================================================
+-- Problem: Sort spilling to disk
+--
+-- In EXPLAIN ANALYZE output, look for:
+--   Sort Method: external merge  Disk: 1872kB
+--
+-- This means PostgreSQL ran out of work_mem and had to write temporary
+-- sort data to disk. Disk I/O is much slower than memory operations.
+--
+-- Why it happens: The default work_mem is 4MB. Sorting 57K rows with
+-- multiple columns exceeds this, forcing an external (disk-based) sort.
+--
+-- Fix: Increase work_mem for this session
+SET work_mem = '64MB';
+--
+-- After the fix, you should see:
+--   Sort Method: quicksort  Memory: 4882kB
+--
+-- The sort now happens entirely in memory using quicksort (much faster).
+-- Note: This is session-level. Use RESET work_mem; to restore default.
+-- For permanent changes, modify postgresql.conf or use ALTER SYSTEM.
 
 
--- SLOW QUERY: SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = $1
--- Diagnosis: Seq Scan, JSONB expression in WHERE clause
--- Fix: Expression index on the extracted value
-CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
+-- QUERY 2: JOIN movies and ratings
+-- ============================================================================
+-- Problem: Sequential scan on large table during join
+--
+-- In EXPLAIN ANALYZE, look for:
+--   Seq Scan on ratings  (actual rows=57000...)
+--
+-- PostgreSQL is reading every row in the ratings table to find matches
+-- for each movie. With 57K rows, this is expensive.
+--
+-- Why it happens: There's no index on ratings.movie_id, so PostgreSQL
+-- can't quickly look up which ratings belong to which movie.
+--
+-- Fix: Add B-Tree index on the join column
+CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
+--
+-- After the fix, look for:
+--   Index Scan using idx_ratings_movie_id on ratings
+-- or:
+--   Bitmap Index Scan on idx_ratings_movie_id
+--
+-- Now PostgreSQL can efficiently find ratings for each movie without
+-- scanning the entire table.
 
 
--- SLOW QUERY: SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = $1
--- Diagnosis: Seq Scan - function on column prevents index use
--- Fix: Rewrite query to use a range instead of EXTRACT()
+-- QUERY 3: SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024
+-- ============================================================================
+-- Problem: Function on column prevents index use
+--
+-- In EXPLAIN ANALYZE, look for:
+--   Seq Scan on users  Filter: (EXTRACT(year FROM created_at) = 2024)
+--
+-- Even if there's an index on created_at, PostgreSQL can't use it because
+-- the WHERE clause applies a function to the column.
+--
+-- Why it happens: An index on created_at stores the actual timestamp values.
+-- PostgreSQL would need to call EXTRACT() on every row to compare, which
+-- defeats the purpose of the index. The planner knows this and chooses
+-- a sequential scan instead.
+--
+-- Fix: Rewrite the query to use a range comparison
 SELECT * FROM users
 WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
--- This allows the index on created_at to be used
+--
+-- This is logically equivalent but allows index use because we're comparing
+-- the column directly to values, not wrapping it in a function.
+--
+-- Alternative: Create an expression index on EXTRACT(YEAR FROM created_at),
+-- but rewriting the query is usually the better choice.
 
 
--- SLOW QUERY: SELECT m.title, m.release_year, COUNT(r.rating_id) FROM movies m JOIN ratings r...
--- Diagnosis: Seq Scan on ratings in the join (57K rows)
--- Fix: Index on the join column
-CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
+-- QUERY 4: SELECT * FROM users WHERE email = 'user500@example.com'
+-- ============================================================================
+-- Problem: No index on filtered column
+--
+-- In EXPLAIN ANALYZE, look for:
+--   Seq Scan on users  Filter: (email = 'user500@example.com')
+--
+-- PostgreSQL is reading all 5,000 user rows to find one email match.
+--
+-- Why it happens: Without an index, PostgreSQL has no way to jump directly
+-- to the matching row. It must check every row sequentially.
+--
+-- Fix: Add B-Tree index on email
+CREATE INDEX idx_users_email ON users(email);
+--
+-- After the fix, look for:
+--   Index Scan using idx_users_email on users
+--
+-- Now PostgreSQL can find the exact row in O(log n) time instead of O(n).
+-- For unique lookups like email, this is a massive improvement.
 
 
--- SLOW QUERY: SELECT * FROM ratings ORDER BY rating DESC
--- Diagnosis: Sort Method: external merge  Disk: XXkB (spilling to disk!)
--- Fix: Increase work_mem for this session
-SET work_mem = '64MB';  -- or higher
--- Then re-run: Sort Method: quicksort  Memory: XXkB (in-memory, much faster)
--- Note: This is a session-level change. Reset with: RESET work_mem;
+-- QUERY 5: SELECT ... WHERE metadata->>'streaming' = 'Streamly'
+-- ============================================================================
+-- Problem: No index on JSONB expression
+--
+-- In EXPLAIN ANALYZE, look for:
+--   Seq Scan on movies  Filter: ((metadata ->> 'streaming') = 'Streamly')
+--
+-- PostgreSQL must extract the 'streaming' value from every row's JSONB
+-- and compare it to 'Streamly'.
+--
+-- Why it happens: Regular B-Tree indexes don't work on JSONB expressions.
+-- You need either a GIN index on the whole JSONB column, or an expression
+-- index on the specific path you're querying.
+--
+-- Fix: Create an expression index on the extracted value
+CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
+--
+-- After the fix, look for:
+--   Index Scan using idx_movies_streaming on movies
+--
+-- The double parentheses are required for expression indexes.
+-- This index only helps queries that use exactly metadata->>'streaming'.
+
+
+-- QUERY 6: SELECT ... WHERE tags @> ARRAY['indie']
+-- ============================================================================
+-- Problem: No index for array containment
+--
+-- In EXPLAIN ANALYZE, look for:
+--   Seq Scan on movies  Filter: (tags @> '{indie}')
+--
+-- PostgreSQL checks every row to see if its tags array contains 'indie'.
+--
+-- Why it happens: B-Tree indexes don't support array containment (@>).
+-- You need a GIN (Generalized Inverted Index) which is designed for
+-- multi-valued columns like arrays, JSONB, and full-text search.
+--
+-- Fix: Create a GIN index on the array column
+CREATE INDEX idx_movies_tags ON movies USING GIN(tags);
+--
+-- After the fix, look for:
+--   Bitmap Index Scan on idx_movies_tags
+--
+-- Note: With only 500 movies, PostgreSQL may still choose Seq Scan even
+-- with the index present. The planner estimates that scanning 500 rows
+-- is cheaper than the index overhead. This is correct behavior!
+-- On larger tables, the GIN index provides significant speedup.
 
 
 -- BONUS 1: Stale Statistics
--- Fix: Run ANALYZE on the new table
+-- ============================================================================
+-- Problem: Row estimate wildly wrong (e.g., "rows=1" but actual rows=500)
+-- Fix: Run ANALYZE to collect statistics
 ANALYZE recent_signups;
 
 
--- BONUS 2: Function Preventing Index Use
--- Rewrite: Use range query instead of EXTRACT()
+-- BONUS 2: Function Preventing Index Use (same as Query 3)
+-- ============================================================================
+-- Fix: Rewrite to use range comparison
 SELECT * FROM users
 WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
 */
