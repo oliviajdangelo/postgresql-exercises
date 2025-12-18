@@ -12,49 +12,7 @@ SELECT pg_stat_statements_reset();
 
 
 -- ============================================================================
--- 1. WILDCARD SEARCHES (can't use B-tree index)
--- ============================================================================
--- These use ILIKE '%...%' which forces a sequential scan
-
-SELECT * FROM movies WHERE title ILIKE '%love%';
-SELECT * FROM movies WHERE title ILIKE '%love%';
-SELECT * FROM movies WHERE title ILIKE '%love%';
-SELECT * FROM movies WHERE title ILIKE '%love%';
-SELECT * FROM movies WHERE title ILIKE '%love%';
-
-SELECT * FROM movies WHERE title ILIKE '%night%';
-SELECT * FROM movies WHERE title ILIKE '%night%';
-SELECT * FROM movies WHERE title ILIKE '%night%';
-SELECT * FROM movies WHERE title ILIKE '%night%';
-SELECT * FROM movies WHERE title ILIKE '%night%';
-
-SELECT * FROM movies WHERE title ILIKE '%star%';
-SELECT * FROM movies WHERE title ILIKE '%star%';
-SELECT * FROM movies WHERE title ILIKE '%star%';
-SELECT * FROM movies WHERE title ILIKE '%star%';
-SELECT * FROM movies WHERE title ILIKE '%star%';
-
-
--- ============================================================================
--- 2. JSONB LOOKUPS (no index on JSON path)
--- ============================================================================
--- Searching inside JSONB without an expression index
-
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
-
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
-SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
-
-
--- ============================================================================
--- 3. MISSING INDEX ON FILTER COLUMN
+-- 1. MISSING INDEX ON FILTER COLUMN (Problem 1: email lookup)
 -- ============================================================================
 -- Filtering on email without an index
 
@@ -67,91 +25,93 @@ SELECT * FROM users WHERE email = 'user200@example.com';
 SELECT * FROM users WHERE email = 'user300@example.com';
 SELECT * FROM users WHERE email = 'user300@example.com';
 SELECT * FROM users WHERE email = 'user300@example.com';
-SELECT * FROM users WHERE email = 'user400@example.com';
-SELECT * FROM users WHERE email = 'user400@example.com';
-SELECT * FROM users WHERE email = 'user400@example.com';
 
 
 -- ============================================================================
--- 4. RATING LOOKUP BY MOVIE (no index on movie_id after reset)
+-- 2. ARRAY CONTAINMENT (Problem 2: no GIN index on tags)
 -- ============================================================================
--- Filtering 57K rows by movie_id
+-- Searching for movies with specific tags
 
-SELECT * FROM ratings WHERE movie_id = 100;
-SELECT * FROM ratings WHERE movie_id = 100;
-SELECT * FROM ratings WHERE movie_id = 100;
-SELECT * FROM ratings WHERE movie_id = 200;
-SELECT * FROM ratings WHERE movie_id = 200;
-SELECT * FROM ratings WHERE movie_id = 200;
-SELECT * FROM ratings WHERE movie_id = 300;
-SELECT * FROM ratings WHERE movie_id = 300;
-SELECT * FROM ratings WHERE movie_id = 300;
+SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
+SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
+SELECT title, tags FROM movies WHERE tags @> ARRAY['indie'];
+SELECT title, tags FROM movies WHERE tags @> ARRAY['blockbuster'];
+SELECT title, tags FROM movies WHERE tags @> ARRAY['blockbuster'];
+SELECT title, tags FROM movies WHERE tags @> ARRAY['blockbuster'];
 
 
 -- ============================================================================
--- 5. MULTI-TABLE JOIN
+-- 3. JSONB LOOKUPS (Problem 3: no index on JSON path)
 -- ============================================================================
--- Joining multiple tables without optimal indexes
+-- Searching inside JSONB without an expression index
 
-SELECT m.title, u.username, r.rating
-FROM ratings r
-JOIN movies m ON m.movie_id = r.movie_id
-JOIN users u ON u.user_id = r.user_id
-WHERE r.rating >= 9;
-
-SELECT m.title, u.username, r.rating
-FROM ratings r
-JOIN movies m ON m.movie_id = r.movie_id
-JOIN users u ON u.user_id = r.user_id
-WHERE r.rating >= 9;
-
-SELECT m.title, u.username, r.rating
-FROM ratings r
-JOIN movies m ON m.movie_id = r.movie_id
-JOIN users u ON u.user_id = r.user_id
-WHERE r.rating >= 9;
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'Streamly';
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
+SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = 'FlixNet';
 
 
 -- ============================================================================
--- 6. DATE RANGE QUERIES (no index on rated_at)
+-- 4. FUNCTION ON INDEXED COLUMN (Problem 5: prevents index use)
 -- ============================================================================
+-- Using EXTRACT() on a column prevents index usage
 
-SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
-SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
-SELECT * FROM ratings WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
-
-SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
-SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
-SELECT * FROM ratings WHERE rated_at >= '2024-01-01' AND rated_at < '2024-02-01';
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2023;
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2023;
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2023;
 
 
 -- ============================================================================
--- 7. CORRELATED SUBQUERY (inefficient pattern)
+-- 5. JOIN QUERY (no index on join column)
 -- ============================================================================
--- Subquery runs once per row in outer query
+-- Joining movies and ratings without index on ratings.movie_id
 
-SELECT title, imdb_rating
+SELECT m.title, m.release_year, COUNT(r.rating_id)
 FROM movies m
-WHERE imdb_rating > (
-    SELECT AVG(imdb_rating) FROM movies m2 WHERE m2.release_year = m.release_year
-);
+JOIN ratings r ON r.movie_id = m.movie_id
+WHERE m.release_year >= 2020
+GROUP BY m.movie_id, m.title, m.release_year
+ORDER BY COUNT(r.rating_id) DESC
+LIMIT 10;
 
-SELECT title, imdb_rating
+SELECT m.title, m.release_year, COUNT(r.rating_id)
 FROM movies m
-WHERE imdb_rating > (
-    SELECT AVG(imdb_rating) FROM movies m2 WHERE m2.release_year = m.release_year
-);
+JOIN ratings r ON r.movie_id = m.movie_id
+WHERE m.release_year >= 2020
+GROUP BY m.movie_id, m.title, m.release_year
+ORDER BY COUNT(r.rating_id) DESC
+LIMIT 10;
 
-SELECT title, imdb_rating
+SELECT m.title, m.release_year, COUNT(r.rating_id)
 FROM movies m
-WHERE imdb_rating > (
-    SELECT AVG(imdb_rating) FROM movies m2 WHERE m2.release_year = m.release_year
-);
+JOIN ratings r ON r.movie_id = m.movie_id
+WHERE m.release_year >= 2020
+GROUP BY m.movie_id, m.title, m.release_year
+ORDER BY COUNT(r.rating_id) DESC
+LIMIT 10;
+
+
+-- ============================================================================
+-- 6. LARGE SORT (spills to disk with default work_mem)
+-- ============================================================================
+-- Sorting the entire ratings table - with default work_mem (4MB), this
+-- spills to disk. Increasing work_mem allows in-memory quicksort.
+
+SELECT * FROM ratings ORDER BY rating DESC;
+SELECT * FROM ratings ORDER BY rating DESC;
+SELECT * FROM ratings ORDER BY rating DESC;
 
 
 -- ============================================================================
 -- Done!
 -- ============================================================================
+-- Note: Problem 4 (stale statistics) is demonstrated in the exercises by
+-- creating a new table without running ANALYZE - no seed queries needed.
 
 SELECT 'Slow queries seeded! Now query pg_stat_statements to see them.' AS status;
 

@@ -280,23 +280,23 @@ ORDER BY avg_rating DESC;
 -- ============================================================================
 
 /*
-** THIS IS THE CAPSTONE EXERCISE - COMPLETE ALL STEPS **
+** THIS IS THE CAPSTONE EXERCISE **
 
-SCENARIO: You're troubleshooting a slow database.
-First, use pg_stat_statements to FIND the slow queries.
-Then, use EXPLAIN ANALYZE to DIAGNOSE why they're slow.
-Finally, FIX them and VERIFY the improvement.
+SCENARIO: You inherit a "slow" database and need to fix it.
+
+Follow the diagnostic workflow from Days 4-5:
+  1. FIND    - Use pg_stat_statements to identify slow queries
+  2. DIAGNOSE - Use EXPLAIN ANALYZE to understand WHY they're slow
+  3. FIX     - Add index, refresh stats, or rewrite query
+  4. VERIFY  - Confirm the improvement
 */
 
 
 -- ============================================================================
--- STEP 0: RESET THE ENVIRONMENT (run this first!)
+-- STEP 1: RESET THE ENVIRONMENT
 -- ============================================================================
 
--- Drop ALL custom indexes so everyone starts fresh with the same environment.
--- This keeps only primary keys and unique constraints.
--- Students may have created indexes with various names during earlier exercises.
-
+-- Drop ALL custom indexes so everyone starts fresh.
 DO $$
 DECLARE
     idx RECORD;
@@ -305,16 +305,16 @@ BEGIN
         SELECT indexname
         FROM pg_indexes
         WHERE schemaname = 'public'
-          AND indexname NOT LIKE '%_pkey'      -- Keep primary keys
-          AND indexname NOT LIKE '%_key'       -- Keep unique constraints
+          AND indexname NOT LIKE '%_pkey'
+          AND indexname NOT LIKE '%_key'
     LOOP
         EXECUTE 'DROP INDEX IF EXISTS ' || idx.indexname;
         RAISE NOTICE 'Dropped index: %', idx.indexname;
     END LOOP;
 END $$;
 
--- Reset pg_stat_statements so we start with clean data
-SELECT pg_stat_statements_reset();
+-- Drop temp tables from previous runs
+DROP TABLE IF EXISTS recent_signups;
 
 -- Refresh table statistics
 ANALYZE users;
@@ -322,30 +322,26 @@ ANALYZE ratings;
 ANALYZE movies;
 ANALYZE watchlist;
 
--- Verify: You should see only primary keys and unique constraints
-SELECT tablename, indexname
-FROM pg_indexes
-WHERE schemaname = 'public'
-ORDER BY tablename, indexname;
+
+-- ============================================================================
+-- STEP 2: SEED SLOW QUERIES
+-- ============================================================================
+
+-- Run the seed script to simulate production query activity:
+\i datasets/seed_slow_queries.sql
+
+-- This runs various problematic queries so pg_stat_statements has data.
 
 
 -- ============================================================================
--- STEP 1: SEED SLOW QUERIES
+-- STEP 3: FIND - Identify the slow queries
 -- ============================================================================
 
--- Run the seed script to generate slow query data:
---   \i datasets/seed_slow_queries.sql
---
--- This runs various slow queries so pg_stat_statements has data to analyze.
+-- Query pg_stat_statements to find the slowest queries.
+-- Look at total_exec_time, calls, and mean_exec_time.
 
-
--- ============================================================================
--- STEP 2: FIND - Use pg_stat_statements
--- ============================================================================
-
--- Find the slowest queries by total execution time
 SELECT
-    substring(query, 1, 60) AS query_preview,
+    substring(query, 1, 80) AS query_preview,
     calls,
     round(total_exec_time::numeric, 2) AS total_ms,
     round(mean_exec_time::numeric, 2) AS avg_ms
@@ -354,148 +350,196 @@ WHERE query NOT LIKE '%pg_stat%'
 ORDER BY total_exec_time DESC
 LIMIT 10;
 
--- What patterns do you see? Which queries are taking the most time?
--- YOUR NOTES:
+-- What do you see? Write down the problematic queries you'll investigate:
+--
+-- Query 1: _______________________________________________________________
+-- Query 2: _______________________________________________________________
+-- Query 3: _______________________________________________________________
+-- Query 4: _______________________________________________________________
+-- Query 5: _______________________________________________________________
+
+
+-- ============================================================================
+-- STEP 4: DIAGNOSE → FIX → VERIFY
+-- ============================================================================
+--
+-- For EACH slow query you found above, follow these steps:
+--
+--   a) DIAGNOSE: Run EXPLAIN ANALYZE on the query
+--      - What scan type is it using? (Seq Scan, Index Scan, etc.)
+--      - Are the row estimates accurate?
+--      - Where is the time being spent?
+--
+--   b) FIX: Apply the appropriate solution
+--      - Missing index? → CREATE INDEX
+--      - Stale statistics? → ANALYZE
+--      - Function on column? → Rewrite the query
+--
+--   c) VERIFY: Run EXPLAIN ANALYZE again
+--      - Did the plan change?
+--      - Is it faster?
+--
+-- Work through as many queries as time allows. Solutions are at the bottom.
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- Your Investigation Space
+-- ----------------------------------------------------------------------------
+
+-- QUERY 1:
+-- Copy a slow query from pg_stat_statements and diagnose it here.
+
+-- DIAGNOSE:
+-- EXPLAIN ANALYZE
+-- <paste query here>
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+-- EXPLAIN ANALYZE
+-- <paste query here again>
+
+
+-- QUERY 2:
+
+-- DIAGNOSE:
+-- EXPLAIN ANALYZE
+-- <paste query here>
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+-- EXPLAIN ANALYZE
+-- <paste query here again>
+
+
+-- QUERY 3:
+
+-- DIAGNOSE:
+-- EXPLAIN ANALYZE
+-- <paste query here>
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+-- EXPLAIN ANALYZE
+-- <paste query here again>
+
+
+-- QUERY 4:
+
+-- DIAGNOSE:
+-- EXPLAIN ANALYZE
+-- <paste query here>
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+-- EXPLAIN ANALYZE
+-- <paste query here again>
+
+
+-- QUERY 5:
+
+-- DIAGNOSE:
+-- EXPLAIN ANALYZE
+-- <paste query here>
+
+-- What's the problem?
+-- YOUR DIAGNOSIS:
+
+-- FIX:
+-- YOUR CODE HERE:
+
+-- VERIFY:
+-- EXPLAIN ANALYZE
+-- <paste query here again>
+
 
 
 
 -- ============================================================================
--- STEP 3: DIAGNOSE & FIX - Work through these problem queries
+-- BONUS CHALLENGES (if time permits)
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- Problem Query 1: Slow user lookup
+-- Bonus 1: Stale Statistics Scenario
 -- ----------------------------------------------------------------------------
 
--- "Finding users by email is really slow"
-EXPLAIN ANALYZE
-SELECT * FROM users WHERE email = 'user500@example.com';
+-- Create a new table WITHOUT running ANALYZE:
+DROP TABLE IF EXISTS recent_signups;
+CREATE TABLE recent_signups AS
+SELECT user_id, username, email, created_at
+FROM users
+WHERE created_at >= '2024-01-01';
 
--- What's the problem?
--- YOUR DIAGNOSIS:
-
-
--- What's the fix?
--- YOUR CODE HERE:
-
-
--- Verify improvement:
--- YOUR CODE HERE:
-
-
-
--- ----------------------------------------------------------------------------
--- Problem Query 2: Slow rating lookup by movie
--- ----------------------------------------------------------------------------
-
--- "Finding all ratings for a specific movie is slow"
-EXPLAIN ANALYZE
-SELECT * FROM ratings WHERE movie_id = 100;
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
-
--- What's the fix?
--- YOUR CODE HERE:
-
-
--- Verify improvement:
--- YOUR CODE HERE:
-
-
-
--- ----------------------------------------------------------------------------
--- Problem Query 3: Slow JSONB lookup
--- ----------------------------------------------------------------------------
-
--- "Searching movies by streaming platform is slow"
--- NOTE: movies table is small (500 rows), so Postgres may choose Seq Scan anyway.
--- The expression index becomes important as the table grows.
-EXPLAIN ANALYZE
-SELECT title, metadata->>'streaming' AS platform
-FROM movies
-WHERE metadata->>'streaming' = 'Streamly';
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
-
--- What's the fix? (Hint: What kind of index helps JSONB expressions?)
--- YOUR CODE HERE:
-
-
--- Verify improvement:
--- YOUR CODE HERE:
-
-
-
-
--- ----------------------------------------------------------------------------
--- Problem Query 4: Slow date range query
--- ----------------------------------------------------------------------------
-
--- "Finding ratings from a specific month is slow"
-EXPLAIN ANALYZE
-SELECT * FROM ratings
-WHERE rated_at >= '2024-06-01' AND rated_at < '2024-07-01';
-
--- What's the problem?
--- YOUR DIAGNOSIS:
-
-
--- What's the fix? (Hint: What column is being filtered?)
--- YOUR CODE HERE:
-
-
--- Verify improvement:
--- YOUR CODE HERE:
-
-
-
--- ----------------------------------------------------------------------------
--- Bonus: Check Table Statistics
--- ----------------------------------------------------------------------------
-
--- Are statistics fresh? (Check last_analyze column)
-SELECT relname, last_analyze, n_live_tup
+-- Check that Postgres has no stats yet:
+SELECT relname, n_live_tup, last_analyze
 FROM pg_stat_user_tables
-ORDER BY last_analyze NULLS FIRST;
+WHERE relname = 'recent_signups';
 
+-- Look at the row estimate vs actual:
+EXPLAIN ANALYZE
+SELECT * FROM recent_signups WHERE created_at >= '2024-06-01';
+
+-- Fix it and verify the estimates improve:
+-- YOUR CODE HERE:
 
 
 
 -- ----------------------------------------------------------------------------
--- (Optional) Bonus Challenge: Lock Investigation
+-- Bonus 2: Function Preventing Index Use
 -- ----------------------------------------------------------------------------
 
--- Check if there are any blocking queries (joins through pg_locks to find actual blocker)
+-- Create an index on created_at:
+CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at);
+
+-- This query CAN'T use the index (function wraps the column):
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = 2024;
+
+-- Rewrite the query so it CAN use the index:
+-- YOUR CODE HERE:
+
+
+
+-- ----------------------------------------------------------------------------
+-- Bonus 3: Check for Lock Contention
+-- ----------------------------------------------------------------------------
+
+-- Are any queries blocking each other right now?
 SELECT
     blocked_locks.pid AS blocked_pid,
     blocked_activity.query AS blocked_query,
     blocking_locks.pid AS blocking_pid,
     blocking_activity.query AS blocking_query
 FROM pg_locks blocked_locks
-JOIN pg_stat_activity blocked_activity
-    ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
 JOIN pg_locks blocking_locks
     ON blocking_locks.locktype = blocked_locks.locktype
     AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
     AND blocking_locks.pid != blocked_locks.pid
-JOIN pg_stat_activity blocking_activity
-    ON blocking_activity.pid = blocking_locks.pid
-WHERE NOT blocked_locks.granted
-  AND blocking_locks.granted;
+JOIN pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted AND blocking_locks.granted;
 
--- Check for long-running transactions
-SELECT
-    pid,
-    NOW() - xact_start AS duration,
-    state,
-    substring(query, 1, 50)
-FROM pg_stat_activity
-WHERE state IN ('active', 'idle in transaction')
-  AND xact_start < NOW() - INTERVAL '5 minutes';
+
 
 
 -- ============================================================================
@@ -604,25 +648,60 @@ FROM pg_statio_user_indexes
 WHERE idx_blks_hit + idx_blks_read > 0
 ORDER BY hit_ratio;
 
--- Capstone Problem Query Solutions:
+-- ============================================================================
+-- CAPSTONE SOLUTIONS (For Instructor Reference)
+-- ============================================================================
+-- These are the queries seeded by seed_slow_queries.sql and their fixes.
+-- Students should discover these by querying pg_stat_statements.
 
--- Problem 1: Slow user lookup
--- Problem: Seq Scan on users table
--- Fix:
+-- SLOW QUERY: SELECT * FROM users WHERE email = $1
+-- Diagnosis: Seq Scan on users (5K rows), filtering by email
+-- Fix: B-Tree index on email column
 CREATE INDEX idx_users_email ON users(email);
 
--- Problem 2: Slow rating lookup by movie
--- Problem: Seq Scan on ratings (57K rows), filtering by movie_id
--- Fix: Index on the filter column
-CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
 
--- Problem 3: Slow JSONB lookup
--- Problem: Seq Scan, can't use regular index on JSONB expression
--- Fix: Expression index on the JSONB path
+-- SLOW QUERY: SELECT title, tags FROM movies WHERE tags @> $1
+-- Diagnosis: Seq Scan on movies, array containment check
+-- Fix: GIN index for array operations
+CREATE INDEX idx_movies_tags ON movies USING GIN(tags);
+-- Note: With only 500 rows, Postgres may still choose Seq Scan. That's OK!
+
+
+-- SLOW QUERY: SELECT title, metadata->>'streaming' FROM movies WHERE metadata->>'streaming' = $1
+-- Diagnosis: Seq Scan, JSONB expression in WHERE clause
+-- Fix: Expression index on the extracted value
 CREATE INDEX idx_movies_streaming ON movies((metadata->>'streaming'));
 
--- Problem 4: Slow date range query
--- Problem: Seq Scan on ratings (57K rows), filtering by rated_at
--- Fix: Index on the date column
-CREATE INDEX idx_ratings_rated_at ON ratings(rated_at);
+
+-- SLOW QUERY: SELECT * FROM users WHERE EXTRACT(YEAR FROM created_at) = $1
+-- Diagnosis: Seq Scan - function on column prevents index use
+-- Fix: Rewrite query to use a range instead of EXTRACT()
+SELECT * FROM users
+WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
+-- This allows the index on created_at to be used
+
+
+-- SLOW QUERY: SELECT m.title, m.release_year, COUNT(r.rating_id) FROM movies m JOIN ratings r...
+-- Diagnosis: Seq Scan on ratings in the join (57K rows)
+-- Fix: Index on the join column
+CREATE INDEX idx_ratings_movie_id ON ratings(movie_id);
+
+
+-- SLOW QUERY: SELECT * FROM ratings ORDER BY rating DESC
+-- Diagnosis: Sort Method: external merge  Disk: XXkB (spilling to disk!)
+-- Fix: Increase work_mem for this session
+SET work_mem = '64MB';  -- or higher
+-- Then re-run: Sort Method: quicksort  Memory: XXkB (in-memory, much faster)
+-- Note: This is a session-level change. Reset with: RESET work_mem;
+
+
+-- BONUS 1: Stale Statistics
+-- Fix: Run ANALYZE on the new table
+ANALYZE recent_signups;
+
+
+-- BONUS 2: Function Preventing Index Use
+-- Rewrite: Use range query instead of EXTRACT()
+SELECT * FROM users
+WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
 */
