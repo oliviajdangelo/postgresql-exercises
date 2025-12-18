@@ -8,9 +8,8 @@
 --   Section 1: Exploring Architecture (25 min)
 --   Section 2: Memory and Caching (25 min)
 --   Section 3: Final Challenge - Full Diagnostic (50 min)
---   Section 4: Course Wrap-up (10 min)
---   ** SURVEY: 10 min reserved for student evaluations **
---   Total: ~110 minutes + 10 min survey
+--   Student Survey (10 min)
+--   Total: ~110 minutes
 --
 -- TABLE SIZES (approximate):
 --   movies           ~500 rows      (small - often uses Seq Scan)
@@ -543,67 +542,13 @@ WHERE NOT blocked_locks.granted AND blocking_locks.granted;
 
 
 -- ============================================================================
--- SECTION 4: Course Wrap-up (10 min)
+-- ******************************************************************************
+-- **                        STUDENT SURVEY (10 min)                           **
+-- **                                                                          **
+-- **   https://www.surveymonkey.com/r/FD336K6                                 **
+-- **                                                                          **
+-- ******************************************************************************
 -- ============================================================================
-
-/*
-=== 6-DAY COURSE SUMMARY ===
-
-DAY 1: Advanced Data Types
-- JSONB for flexible schema
-- Arrays for multi-value fields
-- HSTORE for simple key-value
-- Full-text search basics
-
-DAY 2: Functions & Triggers
-- PL/pgSQL function structure
-- Parameters, variables, control flow
-- EXCEPTION blocks for error handling
-- Triggers for automatic actions
-
-DAY 3: Indexing Strategies
-- B-Tree for equality and ranges
-- GIN for arrays, JSONB, full-text
-- BRIN for large ordered data
-- Monitoring index usage
-
-DAY 4: Query Analysis
-- EXPLAIN and EXPLAIN ANALYZE
-- Reading execution plans
-- Finding bottlenecks
-- Common fixes
-
-DAY 5: Monitoring & Locking
-- pg_stat_statements for query profiling
-- pg_stat_activity for live monitoring
-- Lock types and contention
-- VACUUM and ANALYZE
-
-DAY 6: Architecture & Tuning
-- PostgreSQL process model
-- Memory configuration
-- Cost-based optimizer
-- Performance checklist
-
-
-=== THE WORKFLOW ===
-
-1. FIND: Use pg_stat_statements to identify slow queries
-2. DIAGNOSE: Use EXPLAIN ANALYZE to understand why
-3. FIX: Add index, update stats, rewrite query
-4. VERIFY: Re-run EXPLAIN to confirm improvement
-5. MONITOR: Watch for regressions
-
-
-=== RESOURCES ===
-
-PostgreSQL Docs: postgresql.org/docs/current/
-Books: "PostgreSQL 14 Internals" (free), "The Art of PostgreSQL"
-Tools: pgBadger, auto_explain, pg_stat_statements
-
-
-Thank you for attending! Questions?
-*/
 
 
 -- ============================================================================
